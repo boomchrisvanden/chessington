@@ -1,6 +1,9 @@
 import os
 import sys
 import pygame
+import shutil
+import subprocess
+from pathlib import Path
 
 # --------------------------------------------------------------------
 # Import your engine core here
@@ -64,42 +67,132 @@ class Board:
         return Board()
 
     def _setup_startpos(self):
-        # super minimal: just kings for debugging; replace with real setup
         self.squares = [None] * 64
+
+        # White pieces
+        self.squares[str_to_square("a1")] = (Color.WHITE, PieceType.ROOK)
+        self.squares[str_to_square("b1")] = (Color.WHITE, PieceType.KNIGHT)
+        self.squares[str_to_square("c1")] = (Color.WHITE, PieceType.BISHOP)
+        self.squares[str_to_square("d1")] = (Color.WHITE, PieceType.QUEEN)
         self.squares[str_to_square("e1")] = (Color.WHITE, PieceType.KING)
+        self.squares[str_to_square("f1")] = (Color.WHITE, PieceType.BISHOP)
+        self.squares[str_to_square("g1")] = (Color.WHITE, PieceType.KNIGHT)
+        self.squares[str_to_square("h1")] = (Color.WHITE, PieceType.ROOK)
+        for file_char in "abcdefgh":
+            self.squares[str_to_square(f"{file_char}2")] = (Color.WHITE, PieceType.PAWN)
+
+        # Black pieces
+        self.squares[str_to_square("a8")] = (Color.BLACK, PieceType.ROOK)
+        self.squares[str_to_square("b8")] = (Color.BLACK, PieceType.KNIGHT)
+        self.squares[str_to_square("c8")] = (Color.BLACK, PieceType.BISHOP)
+        self.squares[str_to_square("d8")] = (Color.BLACK, PieceType.QUEEN)
         self.squares[str_to_square("e8")] = (Color.BLACK, PieceType.KING)
+        self.squares[str_to_square("f8")] = (Color.BLACK, PieceType.BISHOP)
+        self.squares[str_to_square("g8")] = (Color.BLACK, PieceType.KNIGHT)
+        self.squares[str_to_square("h8")] = (Color.BLACK, PieceType.ROOK)
+        for file_char in "abcdefgh":
+            self.squares[str_to_square(f"{file_char}7")] = (Color.BLACK, PieceType.PAWN)
+
         self.side_to_move = Color.WHITE
 
     def generate_legal(self) -> List[Move]:
-        # Replace with your real move generator.
-        # For demo: let the white king move one square in any direction legally.
-        moves = []
-        for i, pc in enumerate(self.squares):
-            if pc is None:
-                continue
-            color, pt = pc
-            if color != self.side_to_move:
-                continue
-            if pt != PieceType.KING:
-                continue
-            rank = i // 8
-            file = i % 8
-            for dr in (-1, 0, 1):
-                for df in (-1, 0, 1):
-                    if dr == 0 and df == 0:
-                        continue
-                    r2, f2 = rank + dr, file + df
-                    if 0 <= r2 < 8 and 0 <= f2 < 8:
-                        j = r2 * 8 + f2
-                        if self.squares[j] is None or self.squares[j][0] != color:
-                            moves.append(Move(i, j))
-        return moves
+        return []
 
     def make_move(self, move: Move) -> None:
         piece = self.squares[move.from_sq]
+        if piece is None:
+            return
+
+        color, pt = piece
+
+        # Handle castling (UI-only; no legality checks)
+        if pt == PieceType.KING:
+            if color == Color.WHITE and move.from_sq == str_to_square("e1"):
+                if move.to_sq == str_to_square("g1"):  # O-O
+                    self._move_piece(str_to_square("h1"), str_to_square("f1"))
+                elif move.to_sq == str_to_square("c1"):  # O-O-O
+                    self._move_piece(str_to_square("a1"), str_to_square("d1"))
+            elif color == Color.BLACK and move.from_sq == str_to_square("e8"):
+                if move.to_sq == str_to_square("g8"):  # O-O
+                    self._move_piece(str_to_square("h8"), str_to_square("f8"))
+                elif move.to_sq == str_to_square("c8"):  # O-O-O
+                    self._move_piece(str_to_square("a8"), str_to_square("d8"))
+
+        # Handle en-passant style capture (best-effort, no state tracking)
+        if pt == PieceType.PAWN:
+            from_file = move.from_sq % 8
+            to_file = move.to_sq % 8
+            if abs(to_file - from_file) == 1 and self.squares[move.to_sq] is None:
+                captured_sq = move.to_sq - 8 if color == Color.WHITE else move.to_sq + 8
+                if 0 <= captured_sq < 64:
+                    self.squares[captured_sq] = None
+
+        # Move the piece (captures are implicit)
         self.squares[move.from_sq] = None
-        self.squares[move.to_sq] = piece
+        self.squares[move.to_sq] = (color, pt)
+
+        # Handle promotion (if provided)
+        if pt == PieceType.PAWN and move.promotion is not None:
+            self.squares[move.to_sq] = (color, move.promotion)
+
         self.side_to_move = Color.BLACK if self.side_to_move == Color.WHITE else Color.WHITE
+
+    def _move_piece(self, src: int, dst: int) -> None:
+        piece = self.squares[src]
+        if piece is None:
+            return
+        self.squares[src] = None
+        self.squares[dst] = piece
+
+
+def _convert_svg_to_png(svg_path: Path, png_path: Path, size_px: int) -> bool:
+    """
+    Best-effort SVG->PNG conversion.
+    Returns True if png_path exists after the call.
+    """
+    try:
+        import cairosvg  # type: ignore
+
+        cairosvg.svg2png(
+            url=str(svg_path),
+            write_to=str(png_path),
+            output_width=size_px,
+            output_height=size_px,
+        )
+        return png_path.exists()
+    except Exception:
+        pass
+
+    rsvg = shutil.which("rsvg-convert")
+    if rsvg:
+        subprocess.run(
+            [rsvg, "-w", str(size_px), "-h", str(size_px), "-o", str(png_path), str(svg_path)],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return png_path.exists()
+
+    inkscape = shutil.which("inkscape")
+    if inkscape:
+        subprocess.run(
+            [
+                inkscape,
+                str(svg_path),
+                "--export-type=png",
+                f"--export-filename={png_path}",
+                "-w",
+                str(size_px),
+                "-h",
+                str(size_px),
+            ],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return png_path.exists()
+
+    return False
 
 # --------------------------------------------------------------------
 # Utility: square <-> string
@@ -171,6 +264,7 @@ class ChessGUI:
         self.clock = pygame.time.Clock()
         self.font = pygame.font.SysFont("consolas", 24)
         self.small_font = pygame.font.SysFont("consolas", 18)
+        self.piece_font = pygame.font.SysFont("consolas", 46, bold=True)
 
         self.board = board
         self.input_text = ""
@@ -183,9 +277,11 @@ class ChessGUI:
 
         # Load piece images
         self.pieces = self.load_piece_images(piece_dir)
+        self.fallback_pieces = self.build_fallback_piece_surfaces()
 
     def load_piece_images(self, piece_dir: str):
         pieces = {}
+        piece_dir_path = Path(piece_dir)
         for color, ccode in ((Color.WHITE, 'w'), (Color.BLACK, 'b')):
             for pt, pcode in (
                 (PieceType.PAWN,   'P'),
@@ -195,14 +291,50 @@ class ChessGUI:
                 (PieceType.QUEEN,  'Q'),
                 (PieceType.KING,   'K'),
             ):
-                filename = f"{ccode}{pcode}.png"
-                path = os.path.join(piece_dir, filename)
-                if not os.path.exists(path):
-                    continue  # you can assert here instead if you want
-                img = pygame.image.load(path).convert_alpha()
+                png_name = f"{ccode}{pcode}.png"
+                png_path = piece_dir_path / png_name
+
+                if not png_path.exists():
+                    # If only SVGs are present, try to convert on the fly.
+                    svg_candidates = [
+                        piece_dir_path / f"{ccode}{pcode}.svg",
+                        piece_dir_path / f"{ccode}{pcode.lower()}.svg",
+                    ]
+                    svg_path = next((p for p in svg_candidates if p.exists()), None)
+                    if svg_path is not None:
+                        _convert_svg_to_png(svg_path, png_path, self.square_size)
+
+                if not png_path.exists():
+                    continue
+
+                img = pygame.image.load(str(png_path)).convert_alpha()
                 img = pygame.transform.smoothscale(img, (self.square_size, self.square_size))
                 pieces[(color, pt)] = img
         return pieces
+
+    def build_fallback_piece_surfaces(self):
+        fallback = {}
+        for color in (Color.WHITE, Color.BLACK):
+            for pt, letter in (
+                (PieceType.PAWN, "P"),
+                (PieceType.KNIGHT, "N"),
+                (PieceType.BISHOP, "B"),
+                (PieceType.ROOK, "R"),
+                (PieceType.QUEEN, "Q"),
+                (PieceType.KING, "K"),
+            ):
+                fg = (245, 245, 245) if color == Color.WHITE else (20, 20, 20)
+                outline = (20, 20, 20) if color == Color.WHITE else (245, 245, 245)
+                base = self.piece_font.render(letter, True, fg)
+                shadow = self.piece_font.render(letter, True, outline)
+
+                surf = pygame.Surface((self.square_size, self.square_size), pygame.SRCALPHA)
+                rect = base.get_rect(center=(self.square_size // 2, self.square_size // 2))
+                for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                    surf.blit(shadow, rect.move(dx, dy))
+                surf.blit(base, rect)
+                fallback[(color, pt)] = surf
+        return fallback
 
     def run(self):
         running = True
@@ -244,30 +376,15 @@ class ChessGUI:
         src, dst, promo_letter = parsed
         promo_piece = promo_letter_to_piece(promo_letter)
 
-        legal_moves = self.board.generate_legal()
-        matching_move = None
-        for m in legal_moves:
-            if m.from_sq == src and m.to_sq == dst:
-                # If this is a promotion move, promotion must match
-                if promo_piece is not None:
-                    if m.promotion == promo_piece:
-                        matching_move = m
-                        break
-                    else:
-                        continue
-                # If no promo letter specified, accept only non-promotion moves
-                if m.promotion is None:
-                    matching_move = m
-                    break
-
-        if matching_move is None:
-            self.status_message = f"Illegal move: '{text}'"
+        piece = self.board.squares[src]
+        if piece is None:
+            self.status_message = f"No piece on {square_to_str(src)}"
             return
 
-        # Apply move
-        self.board.make_move(matching_move)
-        self.last_move = matching_move
-        self.status_message = f"Played: {matching_move.uci()}"
+        move = Move(src, dst, promotion=promo_piece)
+        self.board.make_move(move)
+        self.last_move = move
+        self.status_message = f"Played (unchecked): {move.uci()}"
 
         # ----------------------------------------------------------------
         # Hook engine reply here if you want:
@@ -301,6 +418,8 @@ class ChessGUI:
                 piece = self.board.squares[square_index]
                 if piece is not None:
                     img = self.pieces.get(piece)
+                    if img is None:
+                        img = self.fallback_pieces.get(piece)
                     if img is not None:
                         self.screen.blit(img, (x, y))
 
