@@ -130,6 +130,8 @@ class Board:
     def _validate_piece_move(self, color: Color, pt: PieceType, move: Move) -> Tuple[bool, str]:
         if pt == PieceType.PAWN:
             return self._validate_pawn_move(color, move)
+        if pt == PieceType.BISHOP:
+            return self._validate_bishop_move(move)
 
         # Incremental: other pieces are still unchecked (but basic turn/own-capture rules apply above).
         return True, ""
@@ -197,6 +199,29 @@ class Board:
             return True, ""
 
         return False, "illegal pawn move vector"
+
+    def _validate_bishop_move(self, move: Move) -> Tuple[bool, str]:
+        from_rank, from_file = divmod(move.from_sq, 8)
+        to_rank, to_file = divmod(move.to_sq, 8)
+
+        rank_diff = to_rank - from_rank
+        file_diff = to_file - from_file
+
+        if abs(rank_diff) != abs(file_diff):
+            return False, "illegal bishop move vector"
+
+        rank_step = 1 if rank_diff > 0 else -1
+        file_step = 1 if file_diff > 0 else -1
+
+        distance = abs(rank_diff)
+        for i in range(1, distance):
+            r = from_rank + i * rank_step
+            f = from_file + i * file_step
+            sq = r * 8 + f
+            if self.squares[sq] is not None:
+                return False, "bishop path is blocked"
+
+        return True, ""
 
     def make_move(self, move: Move) -> None:
         piece = self.squares[move.from_sq]
