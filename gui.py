@@ -134,6 +134,12 @@ class Board:
             return self._validate_knight_move(move)
         if pt == PieceType.BISHOP:
             return self._validate_bishop_move(move)
+        if pt == PieceType.ROOK:
+            return self._validate_rook_move(move)
+        if pt == PieceType.QUEEN:
+            return self._validate_queen_move(move)
+        if pt == PieceType.KING:
+            return self._validate_king_move(color, move)
 
         # Incremental: other pieces are still unchecked (but basic turn/own-capture rules apply above).
         return True, ""
@@ -234,6 +240,122 @@ class Board:
 
         if (rank_diff, file_diff) not in ((1, 2), (2, 1)):
             return False, "illegal knight move vector"
+
+        return True, ""
+
+    def _validate_rook_move(self, move: Move) -> Tuple[bool, str]:
+        from_rank, from_file = divmod(move.from_sq, 8)
+        to_rank, to_file = divmod(move.to_sq, 8)
+
+        rank_diff = to_rank - from_rank
+        file_diff = to_file - from_file
+
+        if rank_diff != 0 and file_diff != 0:
+            return False, "illegal rook move vector"
+
+        if rank_diff == 0 and file_diff == 0:
+            return False, "illegal rook move vector"
+
+        rank_step = 0 if rank_diff == 0 else (1 if rank_diff > 0 else -1)
+        file_step = 0 if file_diff == 0 else (1 if file_diff > 0 else -1)
+        distance = abs(rank_diff) if rank_diff != 0 else abs(file_diff)
+
+        for i in range(1, distance):
+            r = from_rank + i * rank_step
+            f = from_file + i * file_step
+            sq = r * 8 + f
+            if self.squares[sq] is not None:
+                return False, "rook path is blocked"
+
+        return True, ""
+
+    def _validate_queen_move(self, move: Move) -> Tuple[bool, str]:
+        from_rank, from_file = divmod(move.from_sq, 8)
+        to_rank, to_file = divmod(move.to_sq, 8)
+
+        rank_diff = to_rank - from_rank
+        file_diff = to_file - from_file
+
+        if rank_diff == 0 and file_diff == 0:
+            return False, "illegal queen move vector"
+
+        if rank_diff == 0 or file_diff == 0:
+            rank_step = 0 if rank_diff == 0 else (1 if rank_diff > 0 else -1)
+            file_step = 0 if file_diff == 0 else (1 if file_diff > 0 else -1)
+            distance = abs(rank_diff) if rank_diff != 0 else abs(file_diff)
+
+            for i in range(1, distance):
+                r = from_rank + i * rank_step
+                f = from_file + i * file_step
+                sq = r * 8 + f
+                if self.squares[sq] is not None:
+                    return False, "queen path is blocked"
+
+            return True, ""
+
+        if abs(rank_diff) == abs(file_diff):
+            rank_step = 1 if rank_diff > 0 else -1
+            file_step = 1 if file_diff > 0 else -1
+            distance = abs(rank_diff)
+
+            for i in range(1, distance):
+                r = from_rank + i * rank_step
+                f = from_file + i * file_step
+                sq = r * 8 + f
+                if self.squares[sq] is not None:
+                    return False, "queen path is blocked"
+
+            return True, ""
+
+        return False, "illegal queen move vector"
+
+    def _validate_king_move(self, color: Color, move: Move) -> Tuple[bool, str]:
+        from_rank, from_file = divmod(move.from_sq, 8)
+        to_rank, to_file = divmod(move.to_sq, 8)
+
+        rank_diff = abs(to_rank - from_rank)
+        file_diff = abs(to_file - from_file)
+
+        if max(rank_diff, file_diff) == 1:
+            return True, ""
+
+        return self._validate_castling(color, move)
+
+    def _validate_castling(self, color: Color, move: Move) -> Tuple[bool, str]:
+        if color == Color.WHITE:
+            if move.from_sq != str_to_square("e1"):
+                return False, "illegal king move vector"
+            if move.to_sq == str_to_square("g1"):
+                rook_sq = str_to_square("h1")
+                between = (str_to_square("f1"), str_to_square("g1"))
+            elif move.to_sq == str_to_square("c1"):
+                rook_sq = str_to_square("a1")
+                between = (str_to_square("d1"), str_to_square("c1"), str_to_square("b1"))
+            else:
+                return False, "illegal king move vector"
+
+        else:
+            if move.from_sq != str_to_square("e8"):
+                return False, "illegal king move vector"
+            if move.to_sq == str_to_square("g8"):
+                rook_sq = str_to_square("h8")
+                between = (str_to_square("f8"), str_to_square("g8"))
+            elif move.to_sq == str_to_square("c8"):
+                rook_sq = str_to_square("a8")
+                between = (str_to_square("d8"), str_to_square("c8"), str_to_square("b8"))
+            else:
+                return False, "illegal king move vector"
+
+        if self.squares[move.to_sq] is not None:
+            return False, "castling destination must be empty"
+
+        rook = self.squares[rook_sq]
+        if rook != (color, PieceType.ROOK):
+            return False, "castling rook is missing"
+
+        for sq in between:
+            if self.squares[sq] is not None:
+                return False, "castling path is blocked"
 
         return True, ""
 
