@@ -4,6 +4,7 @@ import pygame
 import shutil
 import subprocess
 from pathlib import Path
+import re
 
 # --------------------------------------------------------------------
 # Import your engine core here
@@ -21,6 +22,9 @@ from typing import Optional, Tuple, List
 class Color(IntEnum):
     WHITE = 0
     BLACK = 1
+
+    def other(self) -> "Color":
+        return Color.BLACK if self == Color.WHITE else Color.WHITE
 
 class PieceType(IntEnum):
     PAWN   = auto()
@@ -60,6 +64,7 @@ class Board:
         # 8x8, index = rank*8 + file
         self.squares: List[Optional[Tuple[Color, PieceType]]] = [None] * 64
         self.side_to_move = Color.WHITE
+        self.ep_square: Optional[int] = None  # en-passant capture destination square
         self._setup_startpos()
 
     @staticmethod
@@ -68,6 +73,7 @@ class Board:
 
     def _setup_startpos(self):
         self.squares = [None] * 64
+        self.ep_square = None
 
         # White pieces
         self.squares[str_to_square("a1")] = (Color.WHITE, PieceType.ROOK)
@@ -98,12 +104,109 @@ class Board:
     def generate_legal(self) -> List[Move]:
         return []
 
+    def validate_move(self, move: Move) -> Tuple[bool, str]:
+        if not (0 <= move.from_sq < 64 and 0 <= move.to_sq < 64):
+            return False, "square out of range"
+        if move.from_sq == move.to_sq:
+            return False, "from/to are the same square"
+
+        piece = self.squares[move.from_sq]
+        if piece is None:
+            return False, f"no piece on {square_to_str(move.from_sq)}"
+
+        color, pt = piece
+        if color != self.side_to_move:
+            return False, "wrong side to move"
+
+        dst_piece = self.squares[move.to_sq]
+        if dst_piece is not None and dst_piece[0] == color:
+            return False, "destination occupied by own piece"
+
+        if pt != PieceType.PAWN and move.promotion is not None:
+            return False, "promotion is only for pawns"
+
+        return self._validate_piece_move(color, pt, move)
+
+    def _validate_piece_move(self, color: Color, pt: PieceType, move: Move) -> Tuple[bool, str]:
+        if pt == PieceType.PAWN:
+            return self._validate_pawn_move(color, move)
+
+        # Incremental: other pieces are still unchecked (but basic turn/own-capture rules apply above).
+        return True, ""
+
+    def _validate_pawn_move(self, color: Color, move: Move) -> Tuple[bool, str]:
+        from_rank, from_file = divmod(move.from_sq, 8)
+        to_rank, to_file = divmod(move.to_sq, 8)
+        rank_step = 1 if color == Color.WHITE else -1
+        start_rank = 1 if color == Color.WHITE else 6
+        promotion_rank = 7 if color == Color.WHITE else 0
+
+        rank_diff = to_rank - from_rank
+        file_diff = to_file - from_file
+        dst_piece = self.squares[move.to_sq]
+
+        # Promotion must only occur on last rank, and is mandatory there.
+        if to_rank == promotion_rank:
+            if move.promotion is None:
+                return False, "promotion required"
+            if move.promotion not in (
+                PieceType.QUEEN,
+                PieceType.ROOK,
+                PieceType.BISHOP,
+                PieceType.KNIGHT,
+            ):
+                return False, "invalid promotion piece"
+        else:
+            if move.promotion is not None:
+                return False, "unexpected promotion"
+
+        # Single / double pushes.
+        if file_diff == 0:
+            if dst_piece is not None:
+                return False, "pawn push is blocked"
+
+            if rank_diff == rank_step:
+                return True, ""
+
+            if rank_diff == 2 * rank_step:
+                if from_rank != start_rank:
+                    return False, "pawn double-push only from start rank"
+                between_sq = move.from_sq + (8 * rank_step)
+                if not (0 <= between_sq < 64) or self.squares[between_sq] is not None:
+                    return False, "pawn double-push is blocked"
+                return True, ""
+
+            return False, "illegal pawn push distance"
+
+        # Captures (including en passant).
+        if abs(file_diff) == 1 and rank_diff == rank_step:
+            if dst_piece is not None:
+                if dst_piece[0] == color:
+                    return False, "cannot capture own piece"
+                return True, ""
+
+            if self.ep_square is None or move.to_sq != self.ep_square:
+                return False, "illegal pawn capture"
+
+            captured_sq = move.to_sq - (8 * rank_step)
+            if not (0 <= captured_sq < 64):
+                return False, "illegal en passant"
+            captured_piece = self.squares[captured_sq]
+            if captured_piece != (color.other(), PieceType.PAWN):
+                return False, "illegal en passant"
+            return True, ""
+
+        return False, "illegal pawn move vector"
+
     def make_move(self, move: Move) -> None:
         piece = self.squares[move.from_sq]
         if piece is None:
             return
 
         color, pt = piece
+        from_rank, from_file = divmod(move.from_sq, 8)
+        to_rank, to_file = divmod(move.to_sq, 8)
+        rank_step = 1 if color == Color.WHITE else -1
 
         # Handle castling (UI-only; no legality checks)
         if pt == PieceType.KING:
@@ -118,14 +221,20 @@ class Board:
                 elif move.to_sq == str_to_square("c8"):  # O-O-O
                     self._move_piece(str_to_square("a8"), str_to_square("d8"))
 
-        # Handle en-passant style capture (best-effort, no state tracking)
-        if pt == PieceType.PAWN:
-            from_file = move.from_sq % 8
-            to_file = move.to_sq % 8
-            if abs(to_file - from_file) == 1 and self.squares[move.to_sq] is None:
-                captured_sq = move.to_sq - 8 if color == Color.WHITE else move.to_sq + 8
-                if 0 <= captured_sq < 64:
-                    self.squares[captured_sq] = None
+        is_en_passant = False
+        if pt == PieceType.PAWN and self.ep_square is not None:
+            if (
+                abs(to_file - from_file) == 1
+                and (to_rank - from_rank) == rank_step
+                and self.squares[move.to_sq] is None
+                and move.to_sq == self.ep_square
+            ):
+                is_en_passant = True
+
+        if is_en_passant:
+            captured_sq = move.to_sq - (8 * rank_step)
+            if 0 <= captured_sq < 64:
+                self.squares[captured_sq] = None
 
         # Move the piece (captures are implicit)
         self.squares[move.from_sq] = None
@@ -134,6 +243,11 @@ class Board:
         # Handle promotion (if provided)
         if pt == PieceType.PAWN and move.promotion is not None:
             self.squares[move.to_sq] = (color, move.promotion)
+
+        # En-passant target square is only set after a pawn double-push, and expires immediately.
+        self.ep_square = None
+        if pt == PieceType.PAWN and from_file == to_file and (to_rank - from_rank) == 2 * rank_step:
+            self.ep_square = move.from_sq + (8 * rank_step)
 
         self.side_to_move = Color.BLACK if self.side_to_move == Color.WHITE else Color.WHITE
 
@@ -268,8 +382,9 @@ class ChessGUI:
 
         self.board = board
         self.input_text = ""
-        self.status_message = "Enter move in UCI format (e2e4, g8f6, e7e8q)"
+        self.status_message = "Enter move in UCI format (e2e4, g8f6, e7e8q) or 'exit'"
         self.last_move: Optional[Move] = None
+        self.running = True
 
         self.light_color = (240, 217, 181)
         self.dark_color = (181, 136, 99)
@@ -282,6 +397,22 @@ class ChessGUI:
     def load_piece_images(self, piece_dir: str):
         pieces = {}
         piece_dir_path = Path(piece_dir)
+
+        png_by_name = {}
+        if piece_dir_path.exists():
+            for p in piece_dir_path.iterdir():
+                if p.is_file() and p.suffix.lower() == ".png":
+                    png_by_name[p.name.lower()] = p
+
+        piece_names = {
+            "P": "pawn",
+            "N": "knight",
+            "B": "bishop",
+            "R": "rook",
+            "Q": "queen",
+            "K": "king",
+        }
+
         for color, ccode in ((Color.WHITE, 'w'), (Color.BLACK, 'b')):
             for pt, pcode in (
                 (PieceType.PAWN,   'P'),
@@ -291,10 +422,31 @@ class ChessGUI:
                 (PieceType.QUEEN,  'Q'),
                 (PieceType.KING,   'K'),
             ):
-                png_name = f"{ccode}{pcode}.png"
-                png_path = piece_dir_path / png_name
+                is_white = color == Color.WHITE
+                piece_name = piece_names[pcode]
 
-                if not png_path.exists():
+                human_color = "white" if is_white else "black"
+                wiki_color = "l" if is_white else "d"  # light/dark (Wikipedia pieces)
+                wiki_re = re.compile(rf"^chess_{pcode.lower()}{wiki_color}t\d+\.png$")
+
+                candidate_names = [
+                    f"{ccode}{pcode}.png",
+                    f"{ccode}{pcode.lower()}.png",
+                    f"{ccode}_{piece_name}.png",
+                    f"{ccode}-{piece_name}.png",
+                    f"{human_color}_{piece_name}.png",
+                    f"{human_color}-{piece_name}.png",
+                    f"{piece_name}_{human_color}.png",
+                    f"{piece_name}-{human_color}.png",
+                ]
+
+                png_path = next((png_by_name.get(name.lower()) for name in candidate_names if name.lower() in png_by_name), None)
+
+                if png_path is None:
+                    wiki_match = next((p for n, p in png_by_name.items() if wiki_re.match(n)), None)
+                    png_path = wiki_match
+
+                if png_path is None:
                     # If only SVGs are present, try to convert on the fly.
                     svg_candidates = [
                         piece_dir_path / f"{ccode}{pcode}.svg",
@@ -302,9 +454,11 @@ class ChessGUI:
                     ]
                     svg_path = next((p for p in svg_candidates if p.exists()), None)
                     if svg_path is not None:
-                        _convert_svg_to_png(svg_path, png_path, self.square_size)
+                        out_png = piece_dir_path / f"{ccode}{pcode}.png"
+                        if _convert_svg_to_png(svg_path, out_png, self.square_size):
+                            png_path = out_png
 
-                if not png_path.exists():
+                if png_path is None or not png_path.exists():
                     continue
 
                 img = pygame.image.load(str(png_path)).convert_alpha()
@@ -337,12 +491,11 @@ class ChessGUI:
         return fallback
 
     def run(self):
-        running = True
-        while running:
+        while self.running:
             self.clock.tick(60)
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
-                    running = False
+                    self.running = False
                 elif event.type == pygame.KEYDOWN:
                     self.handle_key(event)
 
@@ -368,23 +521,26 @@ class ChessGUI:
         text = self.input_text.strip()
         self.input_text = ""
 
+        if text.lower() == "exit":
+            self.running = False
+            return
+
         parsed = parse_uci_move(text)
         if parsed is None:
-            self.status_message = f"Invalid input: '{text}'"
+            self.status_message = f"Invalid syntax: '{text}'"
             return
 
         src, dst, promo_letter = parsed
         promo_piece = promo_letter_to_piece(promo_letter)
-
-        piece = self.board.squares[src]
-        if piece is None:
-            self.status_message = f"No piece on {square_to_str(src)}"
+        move = Move(src, dst, promotion=promo_piece)
+        ok, reason = self.board.validate_move(move)
+        if not ok:
+            self.status_message = f"Invalid move: {reason}"
             return
 
-        move = Move(src, dst, promotion=promo_piece)
         self.board.make_move(move)
         self.last_move = move
-        self.status_message = f"Played (unchecked): {move.uci()}"
+        self.status_message = f"Played: {move.uci()}"
 
         # ----------------------------------------------------------------
         # Hook engine reply here if you want:
@@ -455,7 +611,7 @@ class ChessGUI:
 
         # Draw input text
         display_text = self.input_text if self.input_text else ""
-        input_surf = self.font.render(display_text + "▏", True, (255, 255, 255))
+        input_surf = self.font.render(display_text, True, (255, 255, 255))
         self.screen.blit(input_surf, (130, panel_y + 45))
 
         # Status message
@@ -468,8 +624,37 @@ class ChessGUI:
 # --------------------------------------------------------------------
 
 def main():
-    # Change this to wherever your PNGs live
-    piece_dir = os.path.join(os.path.dirname(__file__), "assets", "pieces")
+    # Default: load pieces from ./assets (fallback: ./assets/pieces)
+    base_dir = Path(__file__).resolve().parent
+    assets_dir = base_dir / "assets"
+    pieces_dir = assets_dir / "pieces"
+
+    def has_piece_images(d: Path) -> bool:
+        if not d.exists():
+            return False
+
+        for p in d.iterdir():
+            if not p.is_file() or p.suffix.lower() != ".png":
+                continue
+            name = p.name.lower()
+            if re.match(r"^[wb][pnbrqk]\.png$", name):
+                return True
+            if re.match(r"^chess_[pnbrqk][ld]t\d+\.png$", name):
+                return True
+            if re.match(r"^(white|black)[_-](pawn|knight|bishop|rook|queen|king)\.png$", name):
+                return True
+            if re.match(r"^(pawn|knight|bishop|rook|queen|king)[_-](white|black)\.png$", name):
+                return True
+            if re.match(r"^[wb][_-](pawn|knight|bishop|rook|queen|king)\.png$", name):
+                return True
+        return False
+
+    if has_piece_images(assets_dir):
+        piece_dir = str(assets_dir)
+    elif has_piece_images(pieces_dir):
+        piece_dir = str(pieces_dir)
+    else:
+        piece_dir = str(assets_dir)
     board = Board.from_startpos()
     gui = ChessGUI(board, piece_dir)
     gui.run()
