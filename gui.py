@@ -104,6 +104,9 @@ class Board:
     def generate_legal(self) -> List[Move]:
         return []
 
+    def reset_to_startpos(self) -> None:
+        self._setup_startpos()
+
     def validate_move(self, move: Move) -> Tuple[bool, str]:
         if not (0 <= move.from_sq < 64 and 0 <= move.to_sq < 64):
             return False, "square out of range"
@@ -121,11 +124,25 @@ class Board:
         dst_piece = self.squares[move.to_sq]
         if dst_piece is not None and dst_piece[0] == color:
             return False, "destination occupied by own piece"
+        if dst_piece is not None and dst_piece[0] != color and dst_piece[1] == PieceType.KING:
+            return False, "cannot capture king"
 
         if pt != PieceType.PAWN and move.promotion is not None:
             return False, "promotion is only for pawns"
 
-        return self._validate_piece_move(color, pt, move)
+        ok, reason = self._validate_piece_move(color, pt, move)
+        if not ok:
+            return False, reason
+
+        was_in_check = self.in_check(color)
+        if self._would_leave_king_in_check(color, move):
+            if pt == PieceType.KING:
+                return False, "king would move into check"
+            if was_in_check:
+                return False, "move doesn't resolve check"
+            return False, "move exposes king to check"
+
+        return True, ""
 
     def _validate_piece_move(self, color: Color, pt: PieceType, move: Move) -> Tuple[bool, str]:
         if pt == PieceType.PAWN:
@@ -328,9 +345,11 @@ class Board:
             if move.to_sq == str_to_square("g1"):
                 rook_sq = str_to_square("h1")
                 between = (str_to_square("f1"), str_to_square("g1"))
+                king_path = between
             elif move.to_sq == str_to_square("c1"):
                 rook_sq = str_to_square("a1")
                 between = (str_to_square("d1"), str_to_square("c1"), str_to_square("b1"))
+                king_path = (str_to_square("d1"), str_to_square("c1"))
             else:
                 return False, "illegal king move vector"
 
@@ -340,14 +359,23 @@ class Board:
             if move.to_sq == str_to_square("g8"):
                 rook_sq = str_to_square("h8")
                 between = (str_to_square("f8"), str_to_square("g8"))
+                king_path = between
             elif move.to_sq == str_to_square("c8"):
                 rook_sq = str_to_square("a8")
                 between = (str_to_square("d8"), str_to_square("c8"), str_to_square("b8"))
+                king_path = (str_to_square("d8"), str_to_square("c8"))
             else:
                 return False, "illegal king move vector"
 
         if self.squares[move.to_sq] is not None:
             return False, "castling destination must be empty"
+
+        enemy = color.other()
+        if self.is_square_attacked(move.from_sq, enemy):
+            return False, "cannot castle out of check"
+        for sq in king_path:
+            if self.is_square_attacked(sq, enemy):
+                return False, "cannot castle through check"
 
         rook = self.squares[rook_sq]
         if rook != (color, PieceType.ROOK):
@@ -358,6 +386,145 @@ class Board:
                 return False, "castling path is blocked"
 
         return True, ""
+
+    def _find_king(self, color: Color) -> Optional[int]:
+        for sq, piece in enumerate(self.squares):
+            if piece == (color, PieceType.KING):
+                return sq
+        return None
+
+    def in_check(self, color: Color) -> bool:
+        king_sq = self._find_king(color)
+        if king_sq is None:
+            return False
+        return self.is_square_attacked(king_sq, color.other())
+
+    def has_any_legal_move(self) -> bool:
+        promotion_rank = 7 if self.side_to_move == Color.WHITE else 0
+        promotion_pieces = (
+            PieceType.QUEEN,
+            PieceType.ROOK,
+            PieceType.BISHOP,
+            PieceType.KNIGHT,
+        )
+
+        for from_sq, piece in enumerate(self.squares):
+            if piece is None:
+                continue
+            color, pt = piece
+            if color != self.side_to_move:
+                continue
+
+            if pt == PieceType.PAWN:
+                for to_sq in range(64):
+                    if to_sq == from_sq:
+                        continue
+                    to_rank = to_sq // 8
+                    if to_rank == promotion_rank:
+                        for promo in promotion_pieces:
+                            if self.validate_move(Move(from_sq, to_sq, promotion=promo))[0]:
+                                return True
+                    else:
+                        if self.validate_move(Move(from_sq, to_sq))[0]:
+                            return True
+                continue
+
+            for to_sq in range(64):
+                if to_sq == from_sq:
+                    continue
+                if self.validate_move(Move(from_sq, to_sq))[0]:
+                    return True
+
+        return False
+
+    def is_checkmate(self) -> bool:
+        return self.in_check(self.side_to_move) and not self.has_any_legal_move()
+
+    def _would_leave_king_in_check(self, color: Color, move: Move) -> bool:
+        squares_before = self.squares[:]
+        ep_before = self.ep_square
+        stm_before = self.side_to_move
+
+        self.make_move(move)
+        still_in_check = self.in_check(color)
+
+        self.squares[:] = squares_before
+        self.ep_square = ep_before
+        self.side_to_move = stm_before
+
+        return still_in_check
+
+    def is_square_attacked(self, square: int, by_color: Color) -> bool:
+        rank, file = divmod(square, 8)
+
+        # Pawn attacks
+        pawn_from_rank = rank - 1 if by_color == Color.WHITE else rank + 1
+        if 0 <= pawn_from_rank < 8:
+            for df in (-1, 1):
+                f = file + df
+                if 0 <= f < 8:
+                    if self.squares[pawn_from_rank * 8 + f] == (by_color, PieceType.PAWN):
+                        return True
+
+        # Knight attacks
+        for dr, df in (
+            (2, 1),
+            (2, -1),
+            (-2, 1),
+            (-2, -1),
+            (1, 2),
+            (1, -2),
+            (-1, 2),
+            (-1, -2),
+        ):
+            r = rank + dr
+            f = file + df
+            if 0 <= r < 8 and 0 <= f < 8:
+                if self.squares[r * 8 + f] == (by_color, PieceType.KNIGHT):
+                    return True
+
+        # King attacks (adjacent squares)
+        for dr in (-1, 0, 1):
+            for df in (-1, 0, 1):
+                if dr == 0 and df == 0:
+                    continue
+                r = rank + dr
+                f = file + df
+                if 0 <= r < 8 and 0 <= f < 8:
+                    if self.squares[r * 8 + f] == (by_color, PieceType.KING):
+                        return True
+
+        # Sliding attacks
+        diag_dirs = ((1, 1), (1, -1), (-1, 1), (-1, -1))
+        ortho_dirs = ((1, 0), (-1, 0), (0, 1), (0, -1))
+
+        for dr, df in diag_dirs:
+            r = rank + dr
+            f = file + df
+            while 0 <= r < 8 and 0 <= f < 8:
+                piece = self.squares[r * 8 + f]
+                if piece is None:
+                    r += dr
+                    f += df
+                    continue
+                if piece[0] == by_color and piece[1] in (PieceType.BISHOP, PieceType.QUEEN):
+                    return True
+                break
+
+        for dr, df in ortho_dirs:
+            r = rank + dr
+            f = file + df
+            while 0 <= r < 8 and 0 <= f < 8:
+                piece = self.squares[r * 8 + f]
+                if piece is None:
+                    r += dr
+                    f += df
+                    continue
+                if piece[0] == by_color and piece[1] in (PieceType.ROOK, PieceType.QUEEN):
+                    return True
+                break
+
+        return False
 
     def make_move(self, move: Move) -> None:
         piece = self.squares[move.from_sq]
@@ -543,9 +710,10 @@ class ChessGUI:
 
         self.board = board
         self.input_text = ""
-        self.status_message = "Enter move in UCI format (e2e4, g8f6, e7e8q) or 'exit'"
+        self.status_message = "Enter move in UCI format (e2e4, g8f6, e7e8q) or 'reset' / 'exit'"
         self.last_move: Optional[Move] = None
         self.running = True
+        self.game_over = False
 
         self.light_color = (240, 217, 181)
         self.dark_color = (181, 136, 99)
@@ -685,6 +853,15 @@ class ChessGUI:
         if text.lower() == "exit":
             self.running = False
             return
+        if text.lower() == "reset":
+            self.board.reset_to_startpos()
+            self.last_move = None
+            self.game_over = False
+            self.status_message = "Reset to start position."
+            return
+        if self.game_over:
+            self.status_message = "Game over. Type 'reset' to restart."
+            return
 
         parsed = parse_uci_move(text)
         if parsed is None:
@@ -702,6 +879,13 @@ class ChessGUI:
         self.board.make_move(move)
         self.last_move = move
         self.status_message = f"Played: {move.uci()}"
+        if self.board.is_checkmate():
+            winner = "White" if self.board.side_to_move == Color.BLACK else "Black"
+            self.status_message = f"Checkmate! {winner} wins. Type 'reset' to restart."
+            self.game_over = True
+            return
+        if self.board.in_check(self.board.side_to_move):
+            self.status_message += " (check)"
 
         # ----------------------------------------------------------------
         # Hook engine reply here if you want:
