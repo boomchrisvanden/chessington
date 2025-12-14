@@ -130,6 +130,8 @@ class Board:
     def _validate_piece_move(self, color: Color, pt: PieceType, move: Move) -> Tuple[bool, str]:
         if pt == PieceType.PAWN:
             return self._validate_pawn_move(color, move)
+        if pt == PieceType.KNIGHT:
+            return self._validate_knight_move(move)
         if pt == PieceType.BISHOP:
             return self._validate_bishop_move(move)
 
@@ -220,6 +222,18 @@ class Board:
             sq = r * 8 + f
             if self.squares[sq] is not None:
                 return False, "bishop path is blocked"
+
+        return True, ""
+
+    def _validate_knight_move(self, move: Move) -> Tuple[bool, str]:
+        from_rank, from_file = divmod(move.from_sq, 8)
+        to_rank, to_file = divmod(move.to_sq, 8)
+
+        rank_diff = abs(to_rank - from_rank)
+        file_diff = abs(to_file - from_file)
+
+        if (rank_diff, file_diff) not in ((1, 2), (2, 1)):
+            return False, "illegal knight move vector"
 
         return True, ""
 
