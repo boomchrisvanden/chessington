@@ -714,6 +714,10 @@ class ChessGUI:
         self.last_move: Optional[Move] = None
         self.running = True
         self.game_over = False
+        self.dragging = False
+        self.drag_from: Optional[int] = None
+        self.drag_piece: Optional[Tuple[Color, PieceType]] = None
+        self.drag_pos = (0, 0)
 
         self.light_color = (240, 217, 181)
         self.dark_color = (181, 136, 99)
@@ -825,6 +829,12 @@ class ChessGUI:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     self.running = False
+                elif event.type == pygame.MOUSEBUTTONDOWN:
+                    self.handle_mouse_down(event)
+                elif event.type == pygame.MOUSEBUTTONUP:
+                    self.handle_mouse_up(event)
+                elif event.type == pygame.MOUSEMOTION:
+                    self.handle_mouse_motion(event)
                 elif event.type == pygame.KEYDOWN:
                     self.handle_key(event)
 
@@ -833,6 +843,55 @@ class ChessGUI:
 
         pygame.quit()
         sys.exit(0)
+
+    def square_from_pos(self, pos: Tuple[int, int]) -> Optional[int]:
+        x, y = pos
+        if x < 0 or y < 0 or x >= self.board_size or y >= self.board_size:
+            return None
+        file = x // self.square_size
+        rank = y // self.square_size
+        return (7 - rank) * 8 + file
+
+    def handle_mouse_down(self, event):
+        if event.button != 1 or self.dragging:
+            return
+        square = self.square_from_pos(event.pos)
+        if square is None:
+            return
+        piece = self.board.squares[square]
+        if piece is None or piece[0] != self.board.side_to_move:
+            return
+        self.dragging = True
+        self.drag_from = square
+        self.drag_piece = piece
+        self.drag_pos = event.pos
+
+    def handle_mouse_motion(self, event):
+        if not self.dragging:
+            return
+        self.drag_pos = event.pos
+
+    def handle_mouse_up(self, event):
+        if event.button != 1 or not self.dragging:
+            return
+        from_sq = self.drag_from
+        piece = self.drag_piece
+        drop_sq = self.square_from_pos(event.pos)
+        self.dragging = False
+        self.drag_from = None
+        self.drag_piece = None
+        if from_sq is None or piece is None or drop_sq is None:
+            return
+        if drop_sq == from_sq:
+            return
+
+        move_text = square_to_str(from_sq) + square_to_str(drop_sq)
+        if piece[1] == PieceType.PAWN:
+            promotion_rank = 7 if piece[0] == Color.WHITE else 0
+            if drop_sq // 8 == promotion_rank:
+                move_text += "q"
+        self.input_text = move_text
+        self.handle_move_input()
 
     def handle_key(self, event):
         if event.key == pygame.K_RETURN:
@@ -849,7 +908,9 @@ class ChessGUI:
     def handle_move_input(self):
         text = self.input_text.strip()
         self.input_text = ""
+        self.apply_move_text(text)
 
+    def apply_move_text(self, text: str) -> None:
         if text.lower() == "exit":
             self.running = False
             return
@@ -918,6 +979,8 @@ class ChessGUI:
 
                 piece = self.board.squares[square_index]
                 if piece is not None:
+                    if self.dragging and self.drag_from == square_index:
+                        continue
                     img = self.pieces.get(piece)
                     if img is None:
                         img = self.fallback_pieces.get(piece)
@@ -936,6 +999,15 @@ class ChessGUI:
             x = 5
             y = (7 - rank) * self.square_size + 5
             self.screen.blit(label, (x, y))
+
+        if self.dragging and self.drag_piece is not None:
+            img = self.pieces.get(self.drag_piece)
+            if img is None:
+                img = self.fallback_pieces.get(self.drag_piece)
+            if img is not None:
+                x = self.drag_pos[0] - self.square_size // 2
+                y = self.drag_pos[1] - self.square_size // 2
+                self.screen.blit(img, (x, y))
 
     def draw_info_panel(self):
         panel_y = self.board_size
