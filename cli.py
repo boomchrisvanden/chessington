@@ -1,15 +1,11 @@
-import re
+from __future__ import annotations
+
+from src.protocols.uci import uci_loop
 
 
-def __main__(self):
-    '''
-    CLI for debugging chess moves
-    '''
+def main() -> None:
+    uci_loop()
 
-    # TODO: initialize.
 
-    move = input("Enter a move in Algebraic notation, ex. d4, Bb5, Bxe7: ")
-
-    # parse move string, validate. 
-    pattern = 
-    
+if __name__ == "__main__":
+    main()

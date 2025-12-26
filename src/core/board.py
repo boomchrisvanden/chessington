@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 from src.core.types import (
@@ -10,8 +11,23 @@ from src.core.types import (
     square_to_str,
     str_to_square,
 )
+from src.core.zobrist import ZOBRIST, piece_index
 
 Piece = Tuple[Color, PieceType]
+
+
+@dataclass(slots=True)
+class MoveUndo:
+    move: Move
+    moved_piece: Piece
+    captured_piece: Optional[Piece]
+    captured_sq: Optional[int]
+    castling_rights: CastlingRights
+    ep_square: Optional[int]
+    halfmove_clock: int
+    fullmove_number: int
+    side_to_move: Color
+    hash: int
 
 
 class Board:
@@ -22,6 +38,8 @@ class Board:
         self.ep_square: Optional[int] = None
         self.halfmove_clock: int = 0
         self.fullmove_number: int = 1
+        self.hash: int = 0
+        self._recompute_hash()
 
     @staticmethod
     def from_startpos() -> "Board":
@@ -65,6 +83,25 @@ class Board:
         self.squares[str_to_square("h8")] = (Color.BLACK, PieceType.ROOK)
         for file_char in "abcdefgh":
             self.squares[str_to_square(f"{file_char}7")] = (Color.BLACK, PieceType.PAWN)
+
+        self._recompute_hash()
+
+    def _toggle_piece(self, color: Color, pt: PieceType, sq: int) -> None:
+        self.hash ^= ZOBRIST.piece_square[piece_index(color, pt)][sq]
+
+    def _recompute_hash(self) -> None:
+        h = 0
+        for sq, piece in enumerate(self.squares):
+            if piece is None:
+                continue
+            color, pt = piece
+            h ^= ZOBRIST.piece_square[piece_index(color, pt)][sq]
+        h ^= ZOBRIST.castling[int(self.castling_rights)]
+        if self.ep_square is not None:
+            h ^= ZOBRIST.ep_file[self.ep_square % 8]
+        if self.side_to_move == Color.BLACK:
+            h ^= ZOBRIST.side
+        self.hash = h
 
     @staticmethod
     def from_fen(fen: str) -> "Board":
@@ -131,6 +168,7 @@ class Board:
         b.ep_square = None if ep == "-" else str_to_square(ep)
         b.halfmove_clock = int(halfmove)
         b.fullmove_number = int(fullmove)
+        b._recompute_hash()
         return b
 
     def validate_move(self, move: Move) -> Tuple[bool, str]:
@@ -171,7 +209,19 @@ class Board:
         return True, ""
 
     def generate_legal(self) -> List[Move]:
-        promotion_rank = 7 if self.side_to_move == Color.WHITE else 0
+        def add_if_legal(move: Move, color: Color, out: List[Move]) -> None:
+            undo = self.make_move(move)
+            if undo is None:
+                return
+            legal = not self.in_check(color)
+            self.unmake_move(undo)
+            if legal:
+                out.append(move)
+
+        color = self.side_to_move
+        promotion_rank = 7 if color == Color.WHITE else 0
+        start_rank = 1 if color == Color.WHITE else 6
+        rank_step = 1 if color == Color.WHITE else -1
         promotion_pieces = (
             PieceType.QUEEN,
             PieceType.ROOK,
@@ -180,35 +230,130 @@ class Board:
         )
 
         moves: List[Move] = []
+
         for from_sq, piece in enumerate(self.squares):
             if piece is None:
                 continue
-            color, pt = piece
-            if color != self.side_to_move:
+            p_color, pt = piece
+            if p_color != color:
                 continue
+
+            from_rank, from_file = divmod(from_sq, 8)
 
             if pt == PieceType.PAWN:
-                for to_sq in range(64):
-                    if to_sq == from_sq:
+                one_step_rank = from_rank + rank_step
+                if 0 <= one_step_rank < 8:
+                    one_step_sq = from_sq + 8 * rank_step
+                    if self.squares[one_step_sq] is None:
+                        if one_step_rank == promotion_rank:
+                            for promo in promotion_pieces:
+                                add_if_legal(Move(from_sq, one_step_sq, promotion=promo), color, moves)
+                        else:
+                            add_if_legal(Move(from_sq, one_step_sq), color, moves)
+
+                        if from_rank == start_rank:
+                            two_step_sq = from_sq + 16 * rank_step
+                            if self.squares[two_step_sq] is None:
+                                add_if_legal(Move(from_sq, two_step_sq), color, moves)
+
+                for file_step in (-1, 1):
+                    to_file = from_file + file_step
+                    to_rank = from_rank + rank_step
+                    if not (0 <= to_file < 8 and 0 <= to_rank < 8):
                         continue
-                    to_rank = to_sq // 8
-                    if to_rank == promotion_rank:
-                        for promo in promotion_pieces:
-                            m = Move(from_sq, to_sq, promotion=promo)
-                            if self.validate_move(m)[0]:
-                                moves.append(m)
-                    else:
-                        m = Move(from_sq, to_sq)
-                        if self.validate_move(m)[0]:
-                            moves.append(m)
+                    to_sq = to_rank * 8 + to_file
+                    target = self.squares[to_sq]
+                    if target is not None:
+                        if target[0] != color and target[1] != PieceType.KING:
+                            if to_rank == promotion_rank:
+                                for promo in promotion_pieces:
+                                    add_if_legal(
+                                        Move(from_sq, to_sq, promotion=promo), color, moves
+                                    )
+                            else:
+                                add_if_legal(Move(from_sq, to_sq), color, moves)
+                    elif self.ep_square == to_sq:
+                        add_if_legal(Move(from_sq, to_sq), color, moves)
                 continue
 
-            for to_sq in range(64):
-                if to_sq == from_sq:
-                    continue
-                m = Move(from_sq, to_sq)
-                if self.validate_move(m)[0]:
-                    moves.append(m)
+            if pt == PieceType.KNIGHT:
+                for dr, df in (
+                    (2, 1),
+                    (2, -1),
+                    (-2, 1),
+                    (-2, -1),
+                    (1, 2),
+                    (1, -2),
+                    (-1, 2),
+                    (-1, -2),
+                ):
+                    r = from_rank + dr
+                    f = from_file + df
+                    if 0 <= r < 8 and 0 <= f < 8:
+                        to_sq = r * 8 + f
+                        target = self.squares[to_sq]
+                        if target is None or (target[0] != color and target[1] != PieceType.KING):
+                            add_if_legal(Move(from_sq, to_sq), color, moves)
+                continue
+
+            if pt == PieceType.BISHOP:
+                directions = ((1, 1), (1, -1), (-1, 1), (-1, -1))
+            elif pt == PieceType.ROOK:
+                directions = ((1, 0), (-1, 0), (0, 1), (0, -1))
+            elif pt == PieceType.QUEEN:
+                directions = (
+                    (1, 1),
+                    (1, -1),
+                    (-1, 1),
+                    (-1, -1),
+                    (1, 0),
+                    (-1, 0),
+                    (0, 1),
+                    (0, -1),
+                )
+            elif pt == PieceType.KING:
+                for dr in (-1, 0, 1):
+                    for df in (-1, 0, 1):
+                        if dr == 0 and df == 0:
+                            continue
+                        r = from_rank + dr
+                        f = from_file + df
+                        if 0 <= r < 8 and 0 <= f < 8:
+                            to_sq = r * 8 + f
+                            target = self.squares[to_sq]
+                            if target is None or (
+                                target[0] != color and target[1] != PieceType.KING
+                            ):
+                                add_if_legal(Move(from_sq, to_sq), color, moves)
+
+                if color == Color.WHITE and from_sq == str_to_square("e1"):
+                    for to_sq in (str_to_square("g1"), str_to_square("c1")):
+                        m = Move(from_sq, to_sq)
+                        if self._validate_castling(color, m)[0]:
+                            add_if_legal(m, color, moves)
+                elif color == Color.BLACK and from_sq == str_to_square("e8"):
+                    for to_sq in (str_to_square("g8"), str_to_square("c8")):
+                        m = Move(from_sq, to_sq)
+                        if self._validate_castling(color, m)[0]:
+                            add_if_legal(m, color, moves)
+                continue
+            else:
+                continue
+
+            for dr, df in directions:
+                r = from_rank + dr
+                f = from_file + df
+                while 0 <= r < 8 and 0 <= f < 8:
+                    to_sq = r * 8 + f
+                    target = self.squares[to_sq]
+                    if target is None:
+                        add_if_legal(Move(from_sq, to_sq), color, moves)
+                    else:
+                        if target[0] != color and target[1] != PieceType.KING:
+                            add_if_legal(Move(from_sq, to_sq), color, moves)
+                        break
+                    r += dr
+                    f += df
 
         return moves
 
@@ -465,23 +610,11 @@ class Board:
         return self.is_square_attacked(king_sq, color.other())
 
     def _would_leave_king_in_check(self, color: Color, move: Move) -> bool:
-        squares_before = self.squares[:]
-        ep_before = self.ep_square
-        stm_before = self.side_to_move
-        castling_before = self.castling_rights
-        halfmove_before = self.halfmove_clock
-        fullmove_before = self.fullmove_number
-
-        self.make_move(move)
+        undo = self.make_move(move)
+        if undo is None:
+            return True
         still_in_check = self.in_check(color)
-
-        self.squares[:] = squares_before
-        self.ep_square = ep_before
-        self.side_to_move = stm_before
-        self.castling_rights = castling_before
-        self.halfmove_clock = halfmove_before
-        self.fullmove_number = fullmove_before
-
+        self.unmake_move(undo)
         return still_in_check
 
     def is_square_attacked(self, square: int, by_color: Color) -> bool:
@@ -552,15 +685,34 @@ class Board:
 
         return False
 
-    def make_move(self, move: Move) -> None:
+    def make_move(self, move: Move) -> Optional[MoveUndo]:
         piece = self.squares[move.from_sq]
         if piece is None:
-            return
+            return None
 
         color, pt = piece
+        undo = MoveUndo(
+            move=move,
+            moved_piece=piece,
+            captured_piece=None,
+            captured_sq=None,
+            castling_rights=self.castling_rights,
+            ep_square=self.ep_square,
+            halfmove_clock=self.halfmove_clock,
+            fullmove_number=self.fullmove_number,
+            side_to_move=self.side_to_move,
+            hash=self.hash,
+        )
+
+        if self.ep_square is not None:
+            self.hash ^= ZOBRIST.ep_file[self.ep_square % 8]
+        self.hash ^= ZOBRIST.castling[int(self.castling_rights)]
+
         from_rank, from_file = divmod(move.from_sq, 8)
         to_rank, to_file = divmod(move.to_sq, 8)
         rank_step = 1 if color == Color.WHITE else -1
+
+        self._toggle_piece(color, pt, move.from_sq)
 
         captured_piece = self.squares[move.to_sq]
         is_en_passant = False
@@ -568,10 +720,22 @@ class Board:
             if (
                 abs(to_file - from_file) == 1
                 and (to_rank - from_rank) == rank_step
-                and self.squares[move.to_sq] is None
+                and captured_piece is None
                 and move.to_sq == self.ep_square
             ):
                 is_en_passant = True
+
+        captured_sq = None
+        if is_en_passant:
+            captured_sq = move.to_sq - (8 * rank_step)
+            if 0 <= captured_sq < 64:
+                captured_piece = self.squares[captured_sq]
+                if captured_piece is not None:
+                    self._toggle_piece(captured_piece[0], captured_piece[1], captured_sq)
+                self.squares[captured_sq] = None
+        elif captured_piece is not None:
+            self._toggle_piece(captured_piece[0], captured_piece[1], move.to_sq)
+            captured_sq = move.to_sq
 
         if pt == PieceType.KING:
             if color == Color.WHITE and move.from_sq == str_to_square("e1"):
@@ -585,11 +749,10 @@ class Board:
                 elif move.to_sq == str_to_square("c8"):
                     self._move_piece(str_to_square("a8"), str_to_square("d8"))
 
-        if is_en_passant:
-            captured_sq = move.to_sq - (8 * rank_step)
-            if 0 <= captured_sq < 64:
-                captured_piece = self.squares[captured_sq]
-                self.squares[captured_sq] = None
+        self.squares[move.from_sq] = None
+        new_pt = move.promotion if (pt == PieceType.PAWN and move.promotion is not None) else pt
+        self.squares[move.to_sq] = (color, new_pt)
+        self._toggle_piece(color, new_pt, move.to_sq)
 
         # Update castling rights (move/capture from starting rook squares, king moves).
         if pt == PieceType.KING:
@@ -608,14 +771,14 @@ class Board:
                 self.castling_rights &= ~CastlingRights.BQ
 
         if captured_piece == (Color.WHITE, PieceType.ROOK):
-            if move.to_sq == str_to_square("h1"):
+            if captured_sq == str_to_square("h1"):
                 self.castling_rights &= ~CastlingRights.WK
-            elif move.to_sq == str_to_square("a1"):
+            elif captured_sq == str_to_square("a1"):
                 self.castling_rights &= ~CastlingRights.WQ
         elif captured_piece == (Color.BLACK, PieceType.ROOK):
-            if move.to_sq == str_to_square("h8"):
+            if captured_sq == str_to_square("h8"):
                 self.castling_rights &= ~CastlingRights.BK
-            elif move.to_sq == str_to_square("a8"):
+            elif captured_sq == str_to_square("a8"):
                 self.castling_rights &= ~CastlingRights.BQ
 
         is_capture = captured_piece is not None
@@ -623,12 +786,6 @@ class Board:
             self.halfmove_clock = 0
         else:
             self.halfmove_clock += 1
-
-        self.squares[move.from_sq] = None
-        self.squares[move.to_sq] = (color, pt)
-
-        if pt == PieceType.PAWN and move.promotion is not None:
-            self.squares[move.to_sq] = (color, move.promotion)
 
         self.ep_square = None
         if pt == PieceType.PAWN and from_file == to_file and (to_rank - from_rank) == 2 * rank_step:
@@ -638,10 +795,56 @@ class Board:
             self.fullmove_number += 1
         self.side_to_move = color.other()
 
+        self.hash ^= ZOBRIST.castling[int(self.castling_rights)]
+        if self.ep_square is not None:
+            self.hash ^= ZOBRIST.ep_file[self.ep_square % 8]
+        self.hash ^= ZOBRIST.side
+
+        undo.captured_piece = captured_piece
+        undo.captured_sq = captured_sq
+        return undo
+
+    def unmake_move(self, undo: MoveUndo) -> None:
+        move = undo.move
+        color, pt = undo.moved_piece
+
+        self.side_to_move = undo.side_to_move
+        self.castling_rights = undo.castling_rights
+        self.ep_square = undo.ep_square
+        self.halfmove_clock = undo.halfmove_clock
+        self.fullmove_number = undo.fullmove_number
+
+        self.squares[move.to_sq] = None
+
+        if pt == PieceType.KING:
+            if color == Color.WHITE and move.from_sq == str_to_square("e1"):
+                if move.to_sq == str_to_square("g1"):
+                    self.squares[str_to_square("h1")] = (Color.WHITE, PieceType.ROOK)
+                    self.squares[str_to_square("f1")] = None
+                elif move.to_sq == str_to_square("c1"):
+                    self.squares[str_to_square("a1")] = (Color.WHITE, PieceType.ROOK)
+                    self.squares[str_to_square("d1")] = None
+            elif color == Color.BLACK and move.from_sq == str_to_square("e8"):
+                if move.to_sq == str_to_square("g8"):
+                    self.squares[str_to_square("h8")] = (Color.BLACK, PieceType.ROOK)
+                    self.squares[str_to_square("f8")] = None
+                elif move.to_sq == str_to_square("c8"):
+                    self.squares[str_to_square("a8")] = (Color.BLACK, PieceType.ROOK)
+                    self.squares[str_to_square("d8")] = None
+
+        self.squares[move.from_sq] = undo.moved_piece
+
+        if undo.captured_piece is not None and undo.captured_sq is not None:
+            self.squares[undo.captured_sq] = undo.captured_piece
+
+        self.hash = undo.hash
+
     def _move_piece(self, src: int, dst: int) -> None:
         piece = self.squares[src]
         if piece is None:
             return
+        color, pt = piece
+        self._toggle_piece(color, pt, src)
+        self._toggle_piece(color, pt, dst)
         self.squares[src] = None
         self.squares[dst] = piece
-

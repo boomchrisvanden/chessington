@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Optional
 
 from src.core.board import Board
 from src.core.types import Move
+from src.search.alphabeta import search as alphabeta_search
 from src.search.tt import TranspositionTable
 
 
@@ -22,13 +23,23 @@ def iterative_deepening(
     tt: Optional[TranspositionTable] = None,
 ) -> SearchResult:
     """
-    Very small (and currently very weak) search stub.
+    Basic iterative deepening over alpha-beta search.
 
-    Returns the first legal move, ignoring max_depth/time_ms/tt for now.
+    time_ms/tt are placeholders for future work.
     """
-    legal = board.generate_legal()
-    if not legal:
+    if max_depth <= 0:
         return SearchResult(score_cp=0, best_move=None, depth=0)
 
-    return SearchResult(score_cp=0, best_move=legal[0], depth=1)
+    best_score = 0
+    best_move: Optional[Move] = None
+    depth_reached = 0
 
+    for depth in range(1, max_depth + 1):
+        score, move = alphabeta_search(board, depth, tt=tt)
+        depth_reached = depth
+        best_score = score
+        best_move = move
+        if move is None:
+            break
+
+    return SearchResult(score_cp=best_score, best_move=best_move, depth=depth_reached)
