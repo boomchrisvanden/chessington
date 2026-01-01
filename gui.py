@@ -4,6 +4,7 @@ import pygame
 import shutil
 import subprocess
 from pathlib import Path
+import re
 
 # --------------------------------------------------------------------
 # Import your engine core here
@@ -21,6 +22,9 @@ from typing import Optional, Tuple, List
 class Color(IntEnum):
     WHITE = 0
     BLACK = 1
+
+    def other(self) -> "Color":
+        return Color.BLACK if self == Color.WHITE else Color.WHITE
 
 class PieceType(IntEnum):
     PAWN   = auto()
@@ -60,6 +64,7 @@ class Board:
         # 8x8, index = rank*8 + file
         self.squares: List[Optional[Tuple[Color, PieceType]]] = [None] * 64
         self.side_to_move = Color.WHITE
+        self.ep_square: Optional[int] = None  # en-passant capture destination square
         self._setup_startpos()
 
     @staticmethod
@@ -68,6 +73,7 @@ class Board:
 
     def _setup_startpos(self):
         self.squares = [None] * 64
+        self.ep_square = None
 
         # White pieces
         self.squares[str_to_square("a1")] = (Color.WHITE, PieceType.ROOK)
@@ -98,12 +104,437 @@ class Board:
     def generate_legal(self) -> List[Move]:
         return []
 
+    def reset_to_startpos(self) -> None:
+        self._setup_startpos()
+
+    def validate_move(self, move: Move) -> Tuple[bool, str]:
+        if not (0 <= move.from_sq < 64 and 0 <= move.to_sq < 64):
+            return False, "square out of range"
+        if move.from_sq == move.to_sq:
+            return False, "from/to are the same square"
+
+        piece = self.squares[move.from_sq]
+        if piece is None:
+            return False, f"no piece on {square_to_str(move.from_sq)}"
+
+        color, pt = piece
+        if color != self.side_to_move:
+            return False, "wrong side to move"
+
+        dst_piece = self.squares[move.to_sq]
+        if dst_piece is not None and dst_piece[0] == color:
+            return False, "destination occupied by own piece"
+        if dst_piece is not None and dst_piece[0] != color and dst_piece[1] == PieceType.KING:
+            return False, "cannot capture king"
+
+        if pt != PieceType.PAWN and move.promotion is not None:
+            return False, "promotion is only for pawns"
+
+        ok, reason = self._validate_piece_move(color, pt, move)
+        if not ok:
+            return False, reason
+
+        was_in_check = self.in_check(color)
+        if self._would_leave_king_in_check(color, move):
+            if pt == PieceType.KING:
+                return False, "king would move into check"
+            if was_in_check:
+                return False, "move doesn't resolve check"
+            return False, "move exposes king to check"
+
+        return True, ""
+
+    def _validate_piece_move(self, color: Color, pt: PieceType, move: Move) -> Tuple[bool, str]:
+        if pt == PieceType.PAWN:
+            return self._validate_pawn_move(color, move)
+        if pt == PieceType.KNIGHT:
+            return self._validate_knight_move(move)
+        if pt == PieceType.BISHOP:
+            return self._validate_bishop_move(move)
+        if pt == PieceType.ROOK:
+            return self._validate_rook_move(move)
+        if pt == PieceType.QUEEN:
+            return self._validate_queen_move(move)
+        if pt == PieceType.KING:
+            return self._validate_king_move(color, move)
+
+        # Incremental: other pieces are still unchecked (but basic turn/own-capture rules apply above).
+        return True, ""
+
+    def _validate_pawn_move(self, color: Color, move: Move) -> Tuple[bool, str]:
+        from_rank, from_file = divmod(move.from_sq, 8)
+        to_rank, to_file = divmod(move.to_sq, 8)
+        rank_step = 1 if color == Color.WHITE else -1
+        start_rank = 1 if color == Color.WHITE else 6
+        promotion_rank = 7 if color == Color.WHITE else 0
+
+        rank_diff = to_rank - from_rank
+        file_diff = to_file - from_file
+        dst_piece = self.squares[move.to_sq]
+
+        # Promotion must only occur on last rank, and is mandatory there.
+        if to_rank == promotion_rank:
+            if move.promotion is None:
+                return False, "promotion required"
+            if move.promotion not in (
+                PieceType.QUEEN,
+                PieceType.ROOK,
+                PieceType.BISHOP,
+                PieceType.KNIGHT,
+            ):
+                return False, "invalid promotion piece"
+        else:
+            if move.promotion is not None:
+                return False, "unexpected promotion"
+
+        # Single / double pushes.
+        if file_diff == 0:
+            if dst_piece is not None:
+                return False, "pawn push is blocked"
+
+            if rank_diff == rank_step:
+                return True, ""
+
+            if rank_diff == 2 * rank_step:
+                if from_rank != start_rank:
+                    return False, "pawn double-push only from start rank"
+                between_sq = move.from_sq + (8 * rank_step)
+                if not (0 <= between_sq < 64) or self.squares[between_sq] is not None:
+                    return False, "pawn double-push is blocked"
+                return True, ""
+
+            return False, "illegal pawn push distance"
+
+        # Captures (including en passant).
+        if abs(file_diff) == 1 and rank_diff == rank_step:
+            if dst_piece is not None:
+                if dst_piece[0] == color:
+                    return False, "cannot capture own piece"
+                return True, ""
+
+            if self.ep_square is None or move.to_sq != self.ep_square:
+                return False, "illegal pawn capture"
+
+            captured_sq = move.to_sq - (8 * rank_step)
+            if not (0 <= captured_sq < 64):
+                return False, "illegal en passant"
+            captured_piece = self.squares[captured_sq]
+            if captured_piece != (color.other(), PieceType.PAWN):
+                return False, "illegal en passant"
+            return True, ""
+
+        return False, "illegal pawn move vector"
+
+    def _validate_bishop_move(self, move: Move) -> Tuple[bool, str]:
+        from_rank, from_file = divmod(move.from_sq, 8)
+        to_rank, to_file = divmod(move.to_sq, 8)
+
+        rank_diff = to_rank - from_rank
+        file_diff = to_file - from_file
+
+        if abs(rank_diff) != abs(file_diff):
+            return False, "illegal bishop move vector"
+
+        rank_step = 1 if rank_diff > 0 else -1
+        file_step = 1 if file_diff > 0 else -1
+
+        distance = abs(rank_diff)
+        for i in range(1, distance):
+            r = from_rank + i * rank_step
+            f = from_file + i * file_step
+            sq = r * 8 + f
+            if self.squares[sq] is not None:
+                return False, "bishop path is blocked"
+
+        return True, ""
+
+    def _validate_knight_move(self, move: Move) -> Tuple[bool, str]:
+        from_rank, from_file = divmod(move.from_sq, 8)
+        to_rank, to_file = divmod(move.to_sq, 8)
+
+        rank_diff = abs(to_rank - from_rank)
+        file_diff = abs(to_file - from_file)
+
+        if (rank_diff, file_diff) not in ((1, 2), (2, 1)):
+            return False, "illegal knight move vector"
+
+        return True, ""
+
+    def _validate_rook_move(self, move: Move) -> Tuple[bool, str]:
+        from_rank, from_file = divmod(move.from_sq, 8)
+        to_rank, to_file = divmod(move.to_sq, 8)
+
+        rank_diff = to_rank - from_rank
+        file_diff = to_file - from_file
+
+        if rank_diff != 0 and file_diff != 0:
+            return False, "illegal rook move vector"
+
+        if rank_diff == 0 and file_diff == 0:
+            return False, "illegal rook move vector"
+
+        rank_step = 0 if rank_diff == 0 else (1 if rank_diff > 0 else -1)
+        file_step = 0 if file_diff == 0 else (1 if file_diff > 0 else -1)
+        distance = abs(rank_diff) if rank_diff != 0 else abs(file_diff)
+
+        for i in range(1, distance):
+            r = from_rank + i * rank_step
+            f = from_file + i * file_step
+            sq = r * 8 + f
+            if self.squares[sq] is not None:
+                return False, "rook path is blocked"
+
+        return True, ""
+
+    def _validate_queen_move(self, move: Move) -> Tuple[bool, str]:
+        from_rank, from_file = divmod(move.from_sq, 8)
+        to_rank, to_file = divmod(move.to_sq, 8)
+
+        rank_diff = to_rank - from_rank
+        file_diff = to_file - from_file
+
+        if rank_diff == 0 and file_diff == 0:
+            return False, "illegal queen move vector"
+
+        if rank_diff == 0 or file_diff == 0:
+            rank_step = 0 if rank_diff == 0 else (1 if rank_diff > 0 else -1)
+            file_step = 0 if file_diff == 0 else (1 if file_diff > 0 else -1)
+            distance = abs(rank_diff) if rank_diff != 0 else abs(file_diff)
+
+            for i in range(1, distance):
+                r = from_rank + i * rank_step
+                f = from_file + i * file_step
+                sq = r * 8 + f
+                if self.squares[sq] is not None:
+                    return False, "queen path is blocked"
+
+            return True, ""
+
+        if abs(rank_diff) == abs(file_diff):
+            rank_step = 1 if rank_diff > 0 else -1
+            file_step = 1 if file_diff > 0 else -1
+            distance = abs(rank_diff)
+
+            for i in range(1, distance):
+                r = from_rank + i * rank_step
+                f = from_file + i * file_step
+                sq = r * 8 + f
+                if self.squares[sq] is not None:
+                    return False, "queen path is blocked"
+
+            return True, ""
+
+        return False, "illegal queen move vector"
+
+    def _validate_king_move(self, color: Color, move: Move) -> Tuple[bool, str]:
+        from_rank, from_file = divmod(move.from_sq, 8)
+        to_rank, to_file = divmod(move.to_sq, 8)
+
+        rank_diff = abs(to_rank - from_rank)
+        file_diff = abs(to_file - from_file)
+
+        if max(rank_diff, file_diff) == 1:
+            return True, ""
+
+        return self._validate_castling(color, move)
+
+    def _validate_castling(self, color: Color, move: Move) -> Tuple[bool, str]:
+        if color == Color.WHITE:
+            if move.from_sq != str_to_square("e1"):
+                return False, "illegal king move vector"
+            if move.to_sq == str_to_square("g1"):
+                rook_sq = str_to_square("h1")
+                between = (str_to_square("f1"), str_to_square("g1"))
+                king_path = between
+            elif move.to_sq == str_to_square("c1"):
+                rook_sq = str_to_square("a1")
+                between = (str_to_square("d1"), str_to_square("c1"), str_to_square("b1"))
+                king_path = (str_to_square("d1"), str_to_square("c1"))
+            else:
+                return False, "illegal king move vector"
+
+        else:
+            if move.from_sq != str_to_square("e8"):
+                return False, "illegal king move vector"
+            if move.to_sq == str_to_square("g8"):
+                rook_sq = str_to_square("h8")
+                between = (str_to_square("f8"), str_to_square("g8"))
+                king_path = between
+            elif move.to_sq == str_to_square("c8"):
+                rook_sq = str_to_square("a8")
+                between = (str_to_square("d8"), str_to_square("c8"), str_to_square("b8"))
+                king_path = (str_to_square("d8"), str_to_square("c8"))
+            else:
+                return False, "illegal king move vector"
+
+        if self.squares[move.to_sq] is not None:
+            return False, "castling destination must be empty"
+
+        enemy = color.other()
+        if self.is_square_attacked(move.from_sq, enemy):
+            return False, "cannot castle out of check"
+        for sq in king_path:
+            if self.is_square_attacked(sq, enemy):
+                return False, "cannot castle through check"
+
+        rook = self.squares[rook_sq]
+        if rook != (color, PieceType.ROOK):
+            return False, "castling rook is missing"
+
+        for sq in between:
+            if self.squares[sq] is not None:
+                return False, "castling path is blocked"
+
+        return True, ""
+
+    def _find_king(self, color: Color) -> Optional[int]:
+        for sq, piece in enumerate(self.squares):
+            if piece == (color, PieceType.KING):
+                return sq
+        return None
+
+    def in_check(self, color: Color) -> bool:
+        king_sq = self._find_king(color)
+        if king_sq is None:
+            return False
+        return self.is_square_attacked(king_sq, color.other())
+
+    def has_any_legal_move(self) -> bool:
+        promotion_rank = 7 if self.side_to_move == Color.WHITE else 0
+        promotion_pieces = (
+            PieceType.QUEEN,
+            PieceType.ROOK,
+            PieceType.BISHOP,
+            PieceType.KNIGHT,
+        )
+
+        for from_sq, piece in enumerate(self.squares):
+            if piece is None:
+                continue
+            color, pt = piece
+            if color != self.side_to_move:
+                continue
+
+            if pt == PieceType.PAWN:
+                for to_sq in range(64):
+                    if to_sq == from_sq:
+                        continue
+                    to_rank = to_sq // 8
+                    if to_rank == promotion_rank:
+                        for promo in promotion_pieces:
+                            if self.validate_move(Move(from_sq, to_sq, promotion=promo))[0]:
+                                return True
+                    else:
+                        if self.validate_move(Move(from_sq, to_sq))[0]:
+                            return True
+                continue
+
+            for to_sq in range(64):
+                if to_sq == from_sq:
+                    continue
+                if self.validate_move(Move(from_sq, to_sq))[0]:
+                    return True
+
+        return False
+
+    def is_checkmate(self) -> bool:
+        return self.in_check(self.side_to_move) and not self.has_any_legal_move()
+
+    def _would_leave_king_in_check(self, color: Color, move: Move) -> bool:
+        squares_before = self.squares[:]
+        ep_before = self.ep_square
+        stm_before = self.side_to_move
+
+        self.make_move(move)
+        still_in_check = self.in_check(color)
+
+        self.squares[:] = squares_before
+        self.ep_square = ep_before
+        self.side_to_move = stm_before
+
+        return still_in_check
+
+    def is_square_attacked(self, square: int, by_color: Color) -> bool:
+        rank, file = divmod(square, 8)
+
+        # Pawn attacks
+        pawn_from_rank = rank - 1 if by_color == Color.WHITE else rank + 1
+        if 0 <= pawn_from_rank < 8:
+            for df in (-1, 1):
+                f = file + df
+                if 0 <= f < 8:
+                    if self.squares[pawn_from_rank * 8 + f] == (by_color, PieceType.PAWN):
+                        return True
+
+        # Knight attacks
+        for dr, df in (
+            (2, 1),
+            (2, -1),
+            (-2, 1),
+            (-2, -1),
+            (1, 2),
+            (1, -2),
+            (-1, 2),
+            (-1, -2),
+        ):
+            r = rank + dr
+            f = file + df
+            if 0 <= r < 8 and 0 <= f < 8:
+                if self.squares[r * 8 + f] == (by_color, PieceType.KNIGHT):
+                    return True
+
+        # King attacks (adjacent squares)
+        for dr in (-1, 0, 1):
+            for df in (-1, 0, 1):
+                if dr == 0 and df == 0:
+                    continue
+                r = rank + dr
+                f = file + df
+                if 0 <= r < 8 and 0 <= f < 8:
+                    if self.squares[r * 8 + f] == (by_color, PieceType.KING):
+                        return True
+
+        # Sliding attacks
+        diag_dirs = ((1, 1), (1, -1), (-1, 1), (-1, -1))
+        ortho_dirs = ((1, 0), (-1, 0), (0, 1), (0, -1))
+
+        for dr, df in diag_dirs:
+            r = rank + dr
+            f = file + df
+            while 0 <= r < 8 and 0 <= f < 8:
+                piece = self.squares[r * 8 + f]
+                if piece is None:
+                    r += dr
+                    f += df
+                    continue
+                if piece[0] == by_color and piece[1] in (PieceType.BISHOP, PieceType.QUEEN):
+                    return True
+                break
+
+        for dr, df in ortho_dirs:
+            r = rank + dr
+            f = file + df
+            while 0 <= r < 8 and 0 <= f < 8:
+                piece = self.squares[r * 8 + f]
+                if piece is None:
+                    r += dr
+                    f += df
+                    continue
+                if piece[0] == by_color and piece[1] in (PieceType.ROOK, PieceType.QUEEN):
+                    return True
+                break
+
+        return False
+
     def make_move(self, move: Move) -> None:
         piece = self.squares[move.from_sq]
         if piece is None:
             return
 
         color, pt = piece
+        from_rank, from_file = divmod(move.from_sq, 8)
+        to_rank, to_file = divmod(move.to_sq, 8)
+        rank_step = 1 if color == Color.WHITE else -1
 
         # Handle castling (UI-only; no legality checks)
         if pt == PieceType.KING:
@@ -118,14 +549,20 @@ class Board:
                 elif move.to_sq == str_to_square("c8"):  # O-O-O
                     self._move_piece(str_to_square("a8"), str_to_square("d8"))
 
-        # Handle en-passant style capture (best-effort, no state tracking)
-        if pt == PieceType.PAWN:
-            from_file = move.from_sq % 8
-            to_file = move.to_sq % 8
-            if abs(to_file - from_file) == 1 and self.squares[move.to_sq] is None:
-                captured_sq = move.to_sq - 8 if color == Color.WHITE else move.to_sq + 8
-                if 0 <= captured_sq < 64:
-                    self.squares[captured_sq] = None
+        is_en_passant = False
+        if pt == PieceType.PAWN and self.ep_square is not None:
+            if (
+                abs(to_file - from_file) == 1
+                and (to_rank - from_rank) == rank_step
+                and self.squares[move.to_sq] is None
+                and move.to_sq == self.ep_square
+            ):
+                is_en_passant = True
+
+        if is_en_passant:
+            captured_sq = move.to_sq - (8 * rank_step)
+            if 0 <= captured_sq < 64:
+                self.squares[captured_sq] = None
 
         # Move the piece (captures are implicit)
         self.squares[move.from_sq] = None
@@ -134,6 +571,11 @@ class Board:
         # Handle promotion (if provided)
         if pt == PieceType.PAWN and move.promotion is not None:
             self.squares[move.to_sq] = (color, move.promotion)
+
+        # En-passant target square is only set after a pawn double-push, and expires immediately.
+        self.ep_square = None
+        if pt == PieceType.PAWN and from_file == to_file and (to_rank - from_rank) == 2 * rank_step:
+            self.ep_square = move.from_sq + (8 * rank_step)
 
         self.side_to_move = Color.BLACK if self.side_to_move == Color.WHITE else Color.WHITE
 
@@ -268,8 +710,14 @@ class ChessGUI:
 
         self.board = board
         self.input_text = ""
-        self.status_message = "Enter move in UCI format (e2e4, g8f6, e7e8q)"
+        self.status_message = "Enter move in UCI format (e2e4, g8f6, e7e8q) or 'reset' / 'exit'"
         self.last_move: Optional[Move] = None
+        self.running = True
+        self.game_over = False
+        self.dragging = False
+        self.drag_from: Optional[int] = None
+        self.drag_piece: Optional[Tuple[Color, PieceType]] = None
+        self.drag_pos = (0, 0)
 
         self.light_color = (240, 217, 181)
         self.dark_color = (181, 136, 99)
@@ -282,6 +730,22 @@ class ChessGUI:
     def load_piece_images(self, piece_dir: str):
         pieces = {}
         piece_dir_path = Path(piece_dir)
+
+        png_by_name = {}
+        if piece_dir_path.exists():
+            for p in piece_dir_path.iterdir():
+                if p.is_file() and p.suffix.lower() == ".png":
+                    png_by_name[p.name.lower()] = p
+
+        piece_names = {
+            "P": "pawn",
+            "N": "knight",
+            "B": "bishop",
+            "R": "rook",
+            "Q": "queen",
+            "K": "king",
+        }
+
         for color, ccode in ((Color.WHITE, 'w'), (Color.BLACK, 'b')):
             for pt, pcode in (
                 (PieceType.PAWN,   'P'),
@@ -291,10 +755,31 @@ class ChessGUI:
                 (PieceType.QUEEN,  'Q'),
                 (PieceType.KING,   'K'),
             ):
-                png_name = f"{ccode}{pcode}.png"
-                png_path = piece_dir_path / png_name
+                is_white = color == Color.WHITE
+                piece_name = piece_names[pcode]
 
-                if not png_path.exists():
+                human_color = "white" if is_white else "black"
+                wiki_color = "l" if is_white else "d"  # light/dark (Wikipedia pieces)
+                wiki_re = re.compile(rf"^chess_{pcode.lower()}{wiki_color}t\d+\.png$")
+
+                candidate_names = [
+                    f"{ccode}{pcode}.png",
+                    f"{ccode}{pcode.lower()}.png",
+                    f"{ccode}_{piece_name}.png",
+                    f"{ccode}-{piece_name}.png",
+                    f"{human_color}_{piece_name}.png",
+                    f"{human_color}-{piece_name}.png",
+                    f"{piece_name}_{human_color}.png",
+                    f"{piece_name}-{human_color}.png",
+                ]
+
+                png_path = next((png_by_name.get(name.lower()) for name in candidate_names if name.lower() in png_by_name), None)
+
+                if png_path is None:
+                    wiki_match = next((p for n, p in png_by_name.items() if wiki_re.match(n)), None)
+                    png_path = wiki_match
+
+                if png_path is None:
                     # If only SVGs are present, try to convert on the fly.
                     svg_candidates = [
                         piece_dir_path / f"{ccode}{pcode}.svg",
@@ -302,9 +787,11 @@ class ChessGUI:
                     ]
                     svg_path = next((p for p in svg_candidates if p.exists()), None)
                     if svg_path is not None:
-                        _convert_svg_to_png(svg_path, png_path, self.square_size)
+                        out_png = piece_dir_path / f"{ccode}{pcode}.png"
+                        if _convert_svg_to_png(svg_path, out_png, self.square_size):
+                            png_path = out_png
 
-                if not png_path.exists():
+                if png_path is None or not png_path.exists():
                     continue
 
                 img = pygame.image.load(str(png_path)).convert_alpha()
@@ -337,12 +824,17 @@ class ChessGUI:
         return fallback
 
     def run(self):
-        running = True
-        while running:
+        while self.running:
             self.clock.tick(60)
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
-                    running = False
+                    self.running = False
+                elif event.type == pygame.MOUSEBUTTONDOWN:
+                    self.handle_mouse_down(event)
+                elif event.type == pygame.MOUSEBUTTONUP:
+                    self.handle_mouse_up(event)
+                elif event.type == pygame.MOUSEMOTION:
+                    self.handle_mouse_motion(event)
                 elif event.type == pygame.KEYDOWN:
                     self.handle_key(event)
 
@@ -351,6 +843,55 @@ class ChessGUI:
 
         pygame.quit()
         sys.exit(0)
+
+    def square_from_pos(self, pos: Tuple[int, int]) -> Optional[int]:
+        x, y = pos
+        if x < 0 or y < 0 or x >= self.board_size or y >= self.board_size:
+            return None
+        file = x // self.square_size
+        rank = y // self.square_size
+        return (7 - rank) * 8 + file
+
+    def handle_mouse_down(self, event):
+        if event.button != 1 or self.dragging:
+            return
+        square = self.square_from_pos(event.pos)
+        if square is None:
+            return
+        piece = self.board.squares[square]
+        if piece is None or piece[0] != self.board.side_to_move:
+            return
+        self.dragging = True
+        self.drag_from = square
+        self.drag_piece = piece
+        self.drag_pos = event.pos
+
+    def handle_mouse_motion(self, event):
+        if not self.dragging:
+            return
+        self.drag_pos = event.pos
+
+    def handle_mouse_up(self, event):
+        if event.button != 1 or not self.dragging:
+            return
+        from_sq = self.drag_from
+        piece = self.drag_piece
+        drop_sq = self.square_from_pos(event.pos)
+        self.dragging = False
+        self.drag_from = None
+        self.drag_piece = None
+        if from_sq is None or piece is None or drop_sq is None:
+            return
+        if drop_sq == from_sq:
+            return
+
+        move_text = square_to_str(from_sq) + square_to_str(drop_sq)
+        if piece[1] == PieceType.PAWN:
+            promotion_rank = 7 if piece[0] == Color.WHITE else 0
+            if drop_sq // 8 == promotion_rank:
+                move_text += "q"
+        self.input_text = move_text
+        self.handle_move_input()
 
     def handle_key(self, event):
         if event.key == pygame.K_RETURN:
@@ -367,24 +908,45 @@ class ChessGUI:
     def handle_move_input(self):
         text = self.input_text.strip()
         self.input_text = ""
+        self.apply_move_text(text)
+
+    def apply_move_text(self, text: str) -> None:
+        if text.lower() == "exit":
+            self.running = False
+            return
+        if text.lower() == "reset":
+            self.board.reset_to_startpos()
+            self.last_move = None
+            self.game_over = False
+            self.status_message = "Reset to start position."
+            return
+        if self.game_over:
+            self.status_message = "Game over. Type 'reset' to restart."
+            return
 
         parsed = parse_uci_move(text)
         if parsed is None:
-            self.status_message = f"Invalid input: '{text}'"
+            self.status_message = f"Invalid syntax: '{text}'"
             return
 
         src, dst, promo_letter = parsed
         promo_piece = promo_letter_to_piece(promo_letter)
-
-        piece = self.board.squares[src]
-        if piece is None:
-            self.status_message = f"No piece on {square_to_str(src)}"
+        move = Move(src, dst, promotion=promo_piece)
+        ok, reason = self.board.validate_move(move)
+        if not ok:
+            self.status_message = f"Invalid move: {reason}"
             return
 
-        move = Move(src, dst, promotion=promo_piece)
         self.board.make_move(move)
         self.last_move = move
-        self.status_message = f"Played (unchecked): {move.uci()}"
+        self.status_message = f"Played: {move.uci()}"
+        if self.board.is_checkmate():
+            winner = "White" if self.board.side_to_move == Color.BLACK else "Black"
+            self.status_message = f"Checkmate! {winner} wins. Type 'reset' to restart."
+            self.game_over = True
+            return
+        if self.board.in_check(self.board.side_to_move):
+            self.status_message += " (check)"
 
         # ----------------------------------------------------------------
         # Hook engine reply here if you want:
@@ -417,6 +979,8 @@ class ChessGUI:
 
                 piece = self.board.squares[square_index]
                 if piece is not None:
+                    if self.dragging and self.drag_from == square_index:
+                        continue
                     img = self.pieces.get(piece)
                     if img is None:
                         img = self.fallback_pieces.get(piece)
@@ -435,6 +999,15 @@ class ChessGUI:
             x = 5
             y = (7 - rank) * self.square_size + 5
             self.screen.blit(label, (x, y))
+
+        if self.dragging and self.drag_piece is not None:
+            img = self.pieces.get(self.drag_piece)
+            if img is None:
+                img = self.fallback_pieces.get(self.drag_piece)
+            if img is not None:
+                x = self.drag_pos[0] - self.square_size // 2
+                y = self.drag_pos[1] - self.square_size // 2
+                self.screen.blit(img, (x, y))
 
     def draw_info_panel(self):
         panel_y = self.board_size
@@ -455,7 +1028,7 @@ class ChessGUI:
 
         # Draw input text
         display_text = self.input_text if self.input_text else ""
-        input_surf = self.font.render(display_text + "▏", True, (255, 255, 255))
+        input_surf = self.font.render(display_text, True, (255, 255, 255))
         self.screen.blit(input_surf, (130, panel_y + 45))
 
         # Status message
@@ -468,8 +1041,37 @@ class ChessGUI:
 # --------------------------------------------------------------------
 
 def main():
-    # Change this to wherever your PNGs live
-    piece_dir = os.path.join(os.path.dirname(__file__), "assets", "pieces")
+    # Default: load pieces from ./assets (fallback: ./assets/pieces)
+    base_dir = Path(__file__).resolve().parent
+    assets_dir = base_dir / "assets"
+    pieces_dir = assets_dir / "pieces"
+
+    def has_piece_images(d: Path) -> bool:
+        if not d.exists():
+            return False
+
+        for p in d.iterdir():
+            if not p.is_file() or p.suffix.lower() != ".png":
+                continue
+            name = p.name.lower()
+            if re.match(r"^[wb][pnbrqk]\.png$", name):
+                return True
+            if re.match(r"^chess_[pnbrqk][ld]t\d+\.png$", name):
+                return True
+            if re.match(r"^(white|black)[_-](pawn|knight|bishop|rook|queen|king)\.png$", name):
+                return True
+            if re.match(r"^(pawn|knight|bishop|rook|queen|king)[_-](white|black)\.png$", name):
+                return True
+            if re.match(r"^[wb][_-](pawn|knight|bishop|rook|queen|king)\.png$", name):
+                return True
+        return False
+
+    if has_piece_images(assets_dir):
+        piece_dir = str(assets_dir)
+    elif has_piece_images(pieces_dir):
+        piece_dir = str(pieces_dir)
+    else:
+        piece_dir = str(assets_dir)
     board = Board.from_startpos()
     gui = ChessGUI(board, piece_dir)
     gui.run()
