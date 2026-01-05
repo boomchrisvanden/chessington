@@ -17,9 +17,14 @@ import re
 
 # For now I’ll define tiny stand-ins; replace with your real ones.
 
-from enum import IntEnum, auto
+from enum import IntEnum, auto, Enum
 from dataclasses import dataclass
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple, List, Callable
+
+# Import theory practice module
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+from theory.practice import DifficultyLevel
+from theory.gui import run_theory_practice
 
 class Color(IntEnum):
     WHITE = 0
@@ -730,6 +735,10 @@ class ChessGUI:
         self.engine_thinking = False
         self.engine_epoch = 0
         self.engine_button_rect = pygame.Rect(self.width - 220, self.board_size + 8, 210, 32)
+        self.menu_button_rect = pygame.Rect(10, self.board_size + 8, 80, 32)
+        
+        # Flag to indicate returning to main menu
+        self.return_to_menu = False
 
         self.light_color = (240, 217, 181)
         self.dark_color = (181, 136, 99)
@@ -835,7 +844,13 @@ class ChessGUI:
                 fallback[(color, pt)] = surf
         return fallback
 
-    def run(self):
+    def run(self) -> bool:
+        """
+        Main game loop.
+        
+        Returns:
+            True if user wants to return to main menu, False otherwise
+        """
         while self.running:
             self.clock.tick(60)
             for event in pygame.event.get():
@@ -855,8 +870,7 @@ class ChessGUI:
             pygame.display.flip()
 
         self.shutdown_engine()
-        pygame.quit()
-        sys.exit(0)
+        return self.return_to_menu
 
     def _reset_board_state(self) -> None:
         self.board.reset_to_startpos()
@@ -1024,6 +1038,11 @@ class ChessGUI:
     def handle_mouse_down(self, event):
         if event.button != 1:
             return
+        # Menu button - return to main menu
+        if self.menu_button_rect.collidepoint(event.pos):
+            self.return_to_menu = True
+            self.running = False
+            return
         if self.engine_button_rect.collidepoint(event.pos):
             self.start_engine_game()
             return
@@ -1073,7 +1092,13 @@ class ChessGUI:
         elif event.key == pygame.K_BACKSPACE:
             self.input_text = self.input_text[:-1]
         elif event.key == pygame.K_ESCAPE:
-            self.input_text = ""
+            # ESC returns to main menu
+            self.return_to_menu = True
+            self.running = False
+        elif event.key == pygame.K_m:
+            # 'm' returns to main menu
+            self.return_to_menu = True
+            self.running = False
         else:
             ch = event.unicode
             if ch and ch.isprintable():
@@ -1215,10 +1240,17 @@ class ChessGUI:
             (0, panel_y, self.width, self.info_height),
         )
 
+        # Menu button
+        menu_color = (100, 100, 140)
+        pygame.draw.rect(self.screen, menu_color, self.menu_button_rect, border_radius=4)
+        menu_label = self.small_font.render("Menu", True, (255, 255, 255))
+        menu_label_rect = menu_label.get_rect(center=self.menu_button_rect.center)
+        self.screen.blit(menu_label, menu_label_rect)
+
         # Current side to move
         stm_text = "White to move" if self.board.side_to_move == Color.WHITE else "Black to move"
         stm_surf = self.font.render(stm_text, True, (220, 220, 220))
-        self.screen.blit(stm_surf, (10, panel_y + 10))
+        self.screen.blit(stm_surf, (100, panel_y + 10))
 
         if self.engine_thinking:
             button_color = (80, 80, 80)
@@ -1236,12 +1268,12 @@ class ChessGUI:
 
         # Input box
         input_label = self.small_font.render("Move (UCI):", True, (200, 200, 200))
-        self.screen.blit(input_label, (10, panel_y + 50))
+        self.screen.blit(input_label, (100, panel_y + 50))
 
         # Draw input text
         display_text = self.input_text if self.input_text else ""
         input_surf = self.font.render(display_text, True, (255, 255, 255))
-        self.screen.blit(input_surf, (130, panel_y + 45))
+        self.screen.blit(input_surf, (220, panel_y + 45))
 
         # Status message
         status_surf = self.small_font.render(self.status_message, True, (200, 200, 0))
@@ -1249,11 +1281,148 @@ class ChessGUI:
 
 
 # --------------------------------------------------------------------
+# Menu System
+# --------------------------------------------------------------------
+
+class MenuOption:
+    """Represents a clickable menu option."""
+    def __init__(self, text: str, rect: pygame.Rect, action: Optional[Callable] = None):
+        self.text = text
+        self.rect = rect
+        self.action = action
+        self.hover = False
+
+
+class MenuScreen:
+    """Base class for menu screens."""
+    
+    def __init__(self, width: int = 640, height: int = 480, title: str = "Menu"):
+        self.width = width
+        self.height = height
+        self.title = title
+        self.screen = pygame.display.get_surface()
+        if self.screen is None or self.screen.get_size() != (width, height):
+            self.screen = pygame.display.set_mode((width, height))
+        pygame.display.set_caption(title)
+        self.clock = pygame.time.Clock()
+        self.font = pygame.font.SysFont("consolas", 28)
+        self.title_font = pygame.font.SysFont("consolas", 42, bold=True)
+        self.small_font = pygame.font.SysFont("consolas", 18)
+        self.options: List[MenuOption] = []
+        self.running = True
+        self.result: Optional[str] = None
+        
+        # Colors
+        self.bg_color = (30, 40, 50)
+        self.button_color = (60, 100, 140)
+        self.button_hover_color = (80, 130, 180)
+        self.text_color = (255, 255, 255)
+        self.title_color = (240, 220, 180)
+    
+    def add_option(self, text: str, y: int, action: Optional[Callable] = None) -> MenuOption:
+        """Add a menu option button."""
+        button_width = 300
+        button_height = 50
+        x = (self.width - button_width) // 2
+        rect = pygame.Rect(x, y, button_width, button_height)
+        option = MenuOption(text, rect, action)
+        self.options.append(option)
+        return option
+    
+    def handle_events(self) -> None:
+        """Process pygame events."""
+        mouse_pos = pygame.mouse.get_pos()
+        
+        for option in self.options:
+            option.hover = option.rect.collidepoint(mouse_pos)
+        
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                self.running = False
+                self.result = "quit"
+            elif event.type == pygame.MOUSEBUTTONDOWN:
+                if event.button == 1:
+                    for option in self.options:
+                        if option.rect.collidepoint(event.pos):
+                            if option.action:
+                                option.action()
+                            else:
+                                self.result = option.text
+                                self.running = False
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    self.running = False
+                    self.result = "back"
+    
+    def draw(self) -> None:
+        """Draw the menu screen."""
+        self.screen.fill(self.bg_color)
+        
+        # Draw title
+        title_surf = self.title_font.render(self.title, True, self.title_color)
+        title_rect = title_surf.get_rect(center=(self.width // 2, 60))
+        self.screen.blit(title_surf, title_rect)
+        
+        # Draw options
+        for option in self.options:
+            color = self.button_hover_color if option.hover else self.button_color
+            pygame.draw.rect(self.screen, color, option.rect, border_radius=8)
+            pygame.draw.rect(self.screen, (100, 150, 200), option.rect, width=2, border_radius=8)
+            
+            text_surf = self.font.render(option.text, True, self.text_color)
+            text_rect = text_surf.get_rect(center=option.rect.center)
+            self.screen.blit(text_surf, text_rect)
+    
+    def run(self) -> Optional[str]:
+        """Run the menu loop and return the selected option."""
+        while self.running:
+            self.clock.tick(60)
+            self.handle_events()
+            self.draw()
+            pygame.display.flip()
+        return self.result
+
+
+class MainMenu(MenuScreen):
+    """Main menu with game mode selection."""
+    
+    def __init__(self):
+        super().__init__(width=640, height=480, title="Chessington")
+        self.add_option("Local Game", 150)
+        self.add_option("Play Against Engine", 220)
+        self.add_option("Theory Practice", 290)
+        self.add_option("Exit", 380)
+
+
+class ColorSelectionMenu(MenuScreen):
+    """Menu for selecting which color to play as."""
+    
+    def __init__(self, title: str = "Select Your Color"):
+        super().__init__(width=640, height=400, title=title)
+        self.add_option("Play as White", 150)
+        self.add_option("Play as Black", 220)
+        self.add_option("Back", 310)
+
+
+class DifficultyMenu(MenuScreen):
+    """Menu for selecting difficulty level in theory practice."""
+    
+    def __init__(self):
+        super().__init__(width=640, height=520, title="Select Difficulty")
+        self.add_option("Infinite (∞ chances)", 130)
+        self.add_option("Easy (10 chances)", 195)
+        self.add_option("Medium (5 chances)", 260)
+        self.add_option("Hard (3 chances)", 325)
+        self.add_option("Insane (1 chance)", 390)
+        self.add_option("Back", 470)
+
+
+# --------------------------------------------------------------------
 # Main
 # --------------------------------------------------------------------
 
-def main():
-    # Default: load pieces from ./assets (fallback: ./assets/pieces)
+def get_piece_dir() -> str:
+    """Get the directory containing piece images."""
     base_dir = Path(__file__).resolve().parent
     assets_dir = base_dir / "assets"
     pieces_dir = assets_dir / "pieces"
@@ -1279,14 +1448,140 @@ def main():
         return False
 
     if has_piece_images(assets_dir):
-        piece_dir = str(assets_dir)
+        return str(assets_dir)
     elif has_piece_images(pieces_dir):
-        piece_dir = str(pieces_dir)
+        return str(pieces_dir)
     else:
-        piece_dir = str(assets_dir)
+        return str(assets_dir)
+
+
+def get_book_path() -> str:
+    """Get the path to the opening book."""
+    base_dir = Path(__file__).resolve().parent
+    return str(base_dir / "src" / "Book.bin")
+
+
+def run_local_game(piece_dir: str) -> bool:
+    """
+    Run a local two-player game.
+    
+    Returns:
+        True if user wants to return to main menu, False otherwise
+    """
     board = Board.from_startpos()
     gui = ChessGUI(board, piece_dir)
-    gui.run()
+    gui.play_vs_engine = False
+    return gui.run()
+
+
+def run_engine_game(piece_dir: str, player_color: Color) -> bool:
+    """
+    Run a game against the engine.
+    
+    Returns:
+        True if user wants to return to main menu, False otherwise
+    """
+    board = Board.from_startpos()
+    gui = ChessGUI(board, piece_dir)
+    gui.play_vs_engine = True
+    gui.engine_side = player_color.other()  # Engine plays the opposite color
+    gui.engine_epoch += 1
+    gui._reset_board_state()
+    
+    if gui._ensure_engine():
+        gui._engine_send("ucinewgame")
+        gui.status_message = f"Engine game started (depth {gui.engine_depth}). You play {'White' if player_color == Color.WHITE else 'Black'}."
+        if board.side_to_move == gui.engine_side:
+            gui._request_engine_move()
+    else:
+        gui.status_message = "Engine failed to start."
+    
+    return gui.run()
+
+
+def run_theory_game(piece_dir: str, book_path: str, difficulty: DifficultyLevel, player_color: int) -> bool:
+    """
+    Run a theory practice game.
+    
+    Returns:
+        True if user wants to return to main menu, False to quit entirely
+    """
+    return run_theory_practice(
+        book_path=book_path,
+        piece_dir=piece_dir,
+        difficulty=difficulty,
+        player_color=player_color
+    )
+
+
+def main():
+    pygame.init()
+    
+    piece_dir = get_piece_dir()
+    book_path = get_book_path()
+    
+    while True:
+        # Show main menu
+        main_menu = MainMenu()
+        choice = main_menu.run()
+        
+        if choice in ("Exit", "quit", None):
+            break
+        
+        if choice == "Local Game":
+            return_to_menu = run_local_game(piece_dir)
+            if not return_to_menu:
+                break  # User quit entirely
+        
+        elif choice == "Play Against Engine":
+            # Show color selection
+            color_menu = ColorSelectionMenu(title="Play Against Engine")
+            color_choice = color_menu.run()
+            
+            if color_choice == "Play as White":
+                return_to_menu = run_engine_game(piece_dir, Color.WHITE)
+                if not return_to_menu:
+                    break
+            elif color_choice == "Play as Black":
+                return_to_menu = run_engine_game(piece_dir, Color.BLACK)
+                if not return_to_menu:
+                    break
+            # "Back" or quit returns to main menu
+        
+        elif choice == "Theory Practice":
+            # Show color selection first
+            color_menu = ColorSelectionMenu(title="Theory Practice - Color")
+            color_choice = color_menu.run()
+            
+            if color_choice in ("Back", "back", "quit", None):
+                continue
+            
+            player_color = 0 if color_choice == "Play as White" else 1
+            
+            # Show difficulty selection
+            diff_menu = DifficultyMenu()
+            diff_choice = diff_menu.run()
+            
+            if diff_choice in ("Back", "back", "quit", None):
+                continue
+            
+            # Map choice to difficulty level
+            difficulty_map = {
+                "Infinite (∞ chances)": DifficultyLevel.INFINITE,
+                "Easy (10 chances)": DifficultyLevel.EASY,
+                "Medium (5 chances)": DifficultyLevel.MEDIUM,
+                "Hard (3 chances)": DifficultyLevel.HARD,
+                "Insane (1 chance)": DifficultyLevel.INSANE,
+            }
+            
+            difficulty = difficulty_map.get(diff_choice, DifficultyLevel.MEDIUM)
+            return_to_menu = run_theory_game(piece_dir, book_path, difficulty, player_color)
+            if not return_to_menu:
+                break
+    
+    pygame.quit()
+    sys.exit(0)
+
 
 if __name__ == "__main__":
     main()
