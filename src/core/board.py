@@ -39,6 +39,8 @@ class Board:
         self.halfmove_clock: int = 0
         self.fullmove_number: int = 1
         self.hash: int = 0
+        self.white_king_sq: Optional[int] = None
+        self.black_king_sq: Optional[int] = None
         self._recompute_hash()
 
     @staticmethod
@@ -66,6 +68,7 @@ class Board:
         self.squares[str_to_square("c1")] = (Color.WHITE, PieceType.BISHOP)
         self.squares[str_to_square("d1")] = (Color.WHITE, PieceType.QUEEN)
         self.squares[str_to_square("e1")] = (Color.WHITE, PieceType.KING)
+        self.white_king_sq = str_to_square("e1")
         self.squares[str_to_square("f1")] = (Color.WHITE, PieceType.BISHOP)
         self.squares[str_to_square("g1")] = (Color.WHITE, PieceType.KNIGHT)
         self.squares[str_to_square("h1")] = (Color.WHITE, PieceType.ROOK)
@@ -78,6 +81,7 @@ class Board:
         self.squares[str_to_square("c8")] = (Color.BLACK, PieceType.BISHOP)
         self.squares[str_to_square("d8")] = (Color.BLACK, PieceType.QUEEN)
         self.squares[str_to_square("e8")] = (Color.BLACK, PieceType.KING)
+        self.black_king_sq = str_to_square("e8")
         self.squares[str_to_square("f8")] = (Color.BLACK, PieceType.BISHOP)
         self.squares[str_to_square("g8")] = (Color.BLACK, PieceType.KNIGHT)
         self.squares[str_to_square("h8")] = (Color.BLACK, PieceType.ROOK)
@@ -113,6 +117,8 @@ class Board:
 
         b = Board()
         b.squares = [None] * 64
+        b.white_king_sq = None
+        b.black_king_sq = None
 
         ranks = piece_placement.split("/")
         if len(ranks) != 8:
@@ -142,6 +148,11 @@ class Board:
                 if not (0 <= file < 8):
                     raise ValueError(f"invalid FEN file overflow: {fen!r}")
                 b.squares[rank * 8 + file] = (color, pt)
+                if pt == PieceType.KING:
+                    if color == Color.WHITE:
+                        b.white_king_sq = rank * 8 + file
+                    else:
+                        b.black_king_sq = rank * 8 + file
                 file += 1
 
             if file != 8:
@@ -208,16 +219,7 @@ class Board:
 
         return True, ""
 
-    def generate_legal(self) -> List[Move]:
-        def add_if_legal(move: Move, color: Color, out: List[Move]) -> None:
-            undo = self.make_move(move)
-            if undo is None:
-                return
-            legal = not self.in_check(color)
-            self.unmake_move(undo)
-            if legal:
-                out.append(move)
-
+    def generate_pseudo_legal(self) -> List[Move]:
         color = self.side_to_move
         promotion_rank = 7 if color == Color.WHITE else 0
         start_rank = 1 if color == Color.WHITE else 6
@@ -247,14 +249,14 @@ class Board:
                     if self.squares[one_step_sq] is None:
                         if one_step_rank == promotion_rank:
                             for promo in promotion_pieces:
-                                add_if_legal(Move(from_sq, one_step_sq, promotion=promo), color, moves)
+                                moves.append(Move(from_sq, one_step_sq, promotion=promo))
                         else:
-                            add_if_legal(Move(from_sq, one_step_sq), color, moves)
+                            moves.append(Move(from_sq, one_step_sq))
 
                         if from_rank == start_rank:
                             two_step_sq = from_sq + 16 * rank_step
                             if self.squares[two_step_sq] is None:
-                                add_if_legal(Move(from_sq, two_step_sq), color, moves)
+                                moves.append(Move(from_sq, two_step_sq))
 
                 for file_step in (-1, 1):
                     to_file = from_file + file_step
@@ -267,13 +269,11 @@ class Board:
                         if target[0] != color and target[1] != PieceType.KING:
                             if to_rank == promotion_rank:
                                 for promo in promotion_pieces:
-                                    add_if_legal(
-                                        Move(from_sq, to_sq, promotion=promo), color, moves
-                                    )
+                                    moves.append(Move(from_sq, to_sq, promotion=promo))
                             else:
-                                add_if_legal(Move(from_sq, to_sq), color, moves)
+                                moves.append(Move(from_sq, to_sq))
                     elif self.ep_square == to_sq:
-                        add_if_legal(Move(from_sq, to_sq), color, moves)
+                        moves.append(Move(from_sq, to_sq))
                 continue
 
             if pt == PieceType.KNIGHT:
@@ -293,7 +293,7 @@ class Board:
                         to_sq = r * 8 + f
                         target = self.squares[to_sq]
                         if target is None or (target[0] != color and target[1] != PieceType.KING):
-                            add_if_legal(Move(from_sq, to_sq), color, moves)
+                            moves.append(Move(from_sq, to_sq))
                 continue
 
             if pt == PieceType.BISHOP:
@@ -324,18 +324,18 @@ class Board:
                             if target is None or (
                                 target[0] != color and target[1] != PieceType.KING
                             ):
-                                add_if_legal(Move(from_sq, to_sq), color, moves)
+                                moves.append(Move(from_sq, to_sq))
 
                 if color == Color.WHITE and from_sq == str_to_square("e1"):
                     for to_sq in (str_to_square("g1"), str_to_square("c1")):
                         m = Move(from_sq, to_sq)
                         if self._validate_castling(color, m)[0]:
-                            add_if_legal(m, color, moves)
+                            moves.append(m)
                 elif color == Color.BLACK and from_sq == str_to_square("e8"):
                     for to_sq in (str_to_square("g8"), str_to_square("c8")):
                         m = Move(from_sq, to_sq)
                         if self._validate_castling(color, m)[0]:
-                            add_if_legal(m, color, moves)
+                            moves.append(m)
                 continue
             else:
                 continue
@@ -347,14 +347,26 @@ class Board:
                     to_sq = r * 8 + f
                     target = self.squares[to_sq]
                     if target is None:
-                        add_if_legal(Move(from_sq, to_sq), color, moves)
+                        moves.append(Move(from_sq, to_sq))
                     else:
                         if target[0] != color and target[1] != PieceType.KING:
-                            add_if_legal(Move(from_sq, to_sq), color, moves)
+                            moves.append(Move(from_sq, to_sq))
                         break
                     r += dr
                     f += df
 
+        return moves
+
+    def generate_legal(self) -> List[Move]:
+        moves: List[Move] = []
+        for move in self.generate_pseudo_legal():
+            undo = self.make_move(move)
+            if undo is None:
+                continue
+            legal = not self.in_check(undo.side_to_move)
+            self.unmake_move(undo)
+            if legal:
+                moves.append(move)
         return moves
 
     def _validate_piece_move(self, color: Color, pt: PieceType, move: Move) -> Tuple[bool, str]:
@@ -598,8 +610,15 @@ class Board:
         return True, ""
 
     def _find_king(self, color: Color) -> Optional[int]:
+        king_sq = self.white_king_sq if color == Color.WHITE else self.black_king_sq
+        if king_sq is not None:
+            return king_sq
         for sq, piece in enumerate(self.squares):
             if piece == (color, PieceType.KING):
+                if color == Color.WHITE:
+                    self.white_king_sq = sq
+                else:
+                    self.black_king_sq = sq
                 return sq
         return None
 
@@ -753,6 +772,11 @@ class Board:
         new_pt = move.promotion if (pt == PieceType.PAWN and move.promotion is not None) else pt
         self.squares[move.to_sq] = (color, new_pt)
         self._toggle_piece(color, new_pt, move.to_sq)
+        if pt == PieceType.KING:
+            if color == Color.WHITE:
+                self.white_king_sq = move.to_sq
+            else:
+                self.black_king_sq = move.to_sq
 
         # Update castling rights (move/capture from starting rook squares, king moves).
         if pt == PieceType.KING:
@@ -833,6 +857,11 @@ class Board:
                     self.squares[str_to_square("d8")] = None
 
         self.squares[move.from_sq] = undo.moved_piece
+        if pt == PieceType.KING:
+            if color == Color.WHITE:
+                self.white_king_sq = move.from_sq
+            else:
+                self.black_king_sq = move.from_sq
 
         if undo.captured_piece is not None and undo.captured_sq is not None:
             self.squares[undo.captured_sq] = undo.captured_piece

@@ -36,26 +36,31 @@ def alphabeta(
         if entry is not None:
             tt_move = entry.best_move
 
-    legal = board.generate_legal()
-    if not legal:
+    moves = board.generate_pseudo_legal()
+    if not moves:
         if board.in_check(board.side_to_move):
             return -MATE_SCORE + ply
         return 0
 
     if tt_move is not None:
         try:
-            idx = legal.index(tt_move)
+            idx = moves.index(tt_move)
         except ValueError:
             idx = -1
         if idx > 0:
-            legal[0], legal[idx] = legal[idx], legal[0]
+            moves[0], moves[idx] = moves[idx], moves[0]
 
     best = -INF
     best_move: Optional[Move] = None
-    for move in legal:
+    found_legal = False
+    for move in moves:
         undo = board.make_move(move)
         if undo is None:
             continue
+        if board.in_check(undo.side_to_move):
+            board.unmake_move(undo)
+            continue
+        found_legal = True
         score = -alphabeta(board, depth - 1, -beta, -alpha, ply + 1, tt=tt)
         board.unmake_move(undo)
         if score > best:
@@ -68,6 +73,10 @@ def alphabeta(
                 tt.store(TTEntry(board.hash, depth, best, Bound.LOWER, best_move))
             break
 
+    if not found_legal:
+        if board.in_check(board.side_to_move):
+            return -MATE_SCORE + ply
+        return 0
     if tt is not None and alpha < beta:
         bound = Bound.EXACT if best > alpha_orig else Bound.UPPER
         tt.store(TTEntry(board.hash, depth, best, bound, best_move))
@@ -83,8 +92,8 @@ def search(
     if depth <= 0:
         return evaluate(board), None
 
-    legal = board.generate_legal()
-    if not legal:
+    moves = board.generate_pseudo_legal()
+    if not moves:
         if board.in_check(board.side_to_move):
             return -MATE_SCORE, None
         return 0, None
@@ -101,16 +110,21 @@ def search(
             tt_move = entry.best_move
     if tt_move is not None:
         try:
-            idx = legal.index(tt_move)
+            idx = moves.index(tt_move)
         except ValueError:
             idx = -1
         if idx > 0:
-            legal[0], legal[idx] = legal[idx], legal[0]
+            moves[0], moves[idx] = moves[idx], moves[0]
 
-    for move in legal:
+    found_legal = False
+    for move in moves:
         undo = board.make_move(move)
         if undo is None:
             continue
+        if board.in_check(undo.side_to_move):
+            board.unmake_move(undo)
+            continue
+        found_legal = True
         score = -alphabeta(board, depth - 1, -beta, -alpha, ply=1, tt=tt)
         board.unmake_move(undo)
         if score > best_score:
@@ -119,6 +133,10 @@ def search(
         if score > alpha:
             alpha = score
 
+    if not found_legal:
+        if board.in_check(board.side_to_move):
+            return -MATE_SCORE, None
+        return 0, None
     if tt is not None:
         tt.store(TTEntry(board.hash, depth, best_score, Bound.EXACT, best_move))
     return best_score, best_move

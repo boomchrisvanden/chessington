@@ -3,6 +3,8 @@ import sys
 import pygame
 import shutil
 import subprocess
+import threading
+import queue
 from pathlib import Path
 import re
 
@@ -719,6 +721,16 @@ class ChessGUI:
         self.drag_piece: Optional[Tuple[Color, PieceType]] = None
         self.drag_pos = (0, 0)
 
+        self.play_vs_engine = False
+        self.engine_depth = 8
+        self.engine_side = Color.WHITE
+        self.move_history: List[str] = []
+        self.engine_proc: Optional[subprocess.Popen] = None
+        self.engine_queue = queue.Queue()
+        self.engine_thinking = False
+        self.engine_epoch = 0
+        self.engine_button_rect = pygame.Rect(self.width - 220, self.board_size + 8, 210, 32)
+
         self.light_color = (240, 217, 181)
         self.dark_color = (181, 136, 99)
         self.highlight_color = (186, 202, 68)
@@ -838,11 +850,168 @@ class ChessGUI:
                 elif event.type == pygame.KEYDOWN:
                     self.handle_key(event)
 
+            self.poll_engine()
             self.draw()
             pygame.display.flip()
 
+        self.shutdown_engine()
         pygame.quit()
         sys.exit(0)
+
+    def _reset_board_state(self) -> None:
+        self.board.reset_to_startpos()
+        self.last_move = None
+        self.game_over = False
+        self.input_text = ""
+        self.move_history = []
+
+    def start_engine_game(self) -> None:
+        if self.engine_thinking:
+            self.status_message = "Engine is busy. Wait for it to finish."
+            return
+        self.play_vs_engine = True
+        self.engine_side = Color.WHITE
+        self.engine_epoch += 1
+        self._reset_board_state()
+        if not self._ensure_engine():
+            self.play_vs_engine = False
+            self.status_message = "Engine failed to start."
+            return
+        self._engine_send("ucinewgame")
+        self.status_message = f"Engine game started (depth {self.engine_depth})."
+        if self.board.side_to_move == self.engine_side:
+            self._request_engine_move()
+
+    def _ensure_engine(self) -> bool:
+        if self.engine_proc is not None and self.engine_proc.poll() is None:
+            return True
+        engine_path = Path(__file__).resolve().parent / "cli.py"
+        try:
+            self.engine_proc = subprocess.Popen(
+                [sys.executable, "-u", str(engine_path)],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+        except OSError:
+            self.engine_proc = None
+            return False
+        if not self._engine_handshake():
+            self.shutdown_engine()
+            return False
+        return True
+
+    def _engine_handshake(self) -> bool:
+        if not self._engine_send("uci"):
+            return False
+        if not self._engine_read_until("uciok"):
+            return False
+        if not self._engine_send("isready"):
+            return False
+        if not self._engine_read_until("readyok"):
+            return False
+        return True
+
+    def _engine_send(self, cmd: str) -> bool:
+        if self.engine_proc is None or self.engine_proc.stdin is None:
+            return False
+        try:
+            self.engine_proc.stdin.write(cmd + "\n")
+            self.engine_proc.stdin.flush()
+        except (BrokenPipeError, OSError):
+            return False
+        return True
+
+    def _engine_read_line(self) -> Optional[str]:
+        if self.engine_proc is None or self.engine_proc.stdout is None:
+            return None
+        line = self.engine_proc.stdout.readline()
+        if not line:
+            return None
+        return line.strip()
+
+    def _engine_read_until(self, token: str) -> bool:
+        while True:
+            line = self._engine_read_line()
+            if line is None:
+                return False
+            if line == token or line.startswith(token):
+                return True
+
+    def _uci_position_command(self) -> str:
+        if not self.move_history:
+            return "position startpos"
+        return "position startpos moves " + " ".join(self.move_history)
+
+    def _request_engine_move(self) -> None:
+        if self.engine_thinking or self.game_over:
+            return
+        if not self._ensure_engine():
+            self.status_message = "Engine not available."
+            return
+        self.engine_thinking = True
+        self.status_message = f"Engine thinking (depth {self.engine_depth})..."
+        epoch = self.engine_epoch
+        threading.Thread(target=self._engine_search, args=(epoch,), daemon=True).start()
+
+    def _engine_search(self, epoch: int) -> None:
+        if not self._ensure_engine():
+            self.engine_queue.put((epoch, None, "Engine not available."))
+            return
+        if not self._engine_send(self._uci_position_command()):
+            self.engine_queue.put((epoch, None, "Engine command failed."))
+            return
+        if not self._engine_send(f"go depth {self.engine_depth}"):
+            self.engine_queue.put((epoch, None, "Engine command failed."))
+            return
+        bestmove: Optional[str] = None
+        while True:
+            line = self._engine_read_line()
+            if line is None:
+                break
+            if line.startswith("bestmove"):
+                parts = line.split()
+                if len(parts) >= 2:
+                    bestmove = parts[1]
+                break
+        if bestmove in (None, "0000", "(none)"):
+            self.engine_queue.put((epoch, None, "Engine returned no move."))
+        else:
+            self.engine_queue.put((epoch, bestmove, None))
+
+    def poll_engine(self) -> None:
+        while True:
+            try:
+                epoch, bestmove, error = self.engine_queue.get_nowait()
+            except queue.Empty:
+                break
+            self.engine_thinking = False
+            if epoch != self.engine_epoch:
+                continue
+            if error is not None:
+                self.status_message = error
+                continue
+            if bestmove is None:
+                self.status_message = "Engine returned no move."
+                continue
+            self.apply_engine_move(bestmove)
+
+    def shutdown_engine(self) -> None:
+        if self.engine_proc is None:
+            return
+        try:
+            if self.engine_proc.stdin is not None:
+                self.engine_proc.stdin.write("quit\n")
+                self.engine_proc.stdin.flush()
+        except (BrokenPipeError, OSError):
+            pass
+        try:
+            self.engine_proc.terminate()
+        except OSError:
+            pass
+        self.engine_proc = None
 
     def square_from_pos(self, pos: Tuple[int, int]) -> Optional[int]:
         x, y = pos
@@ -853,7 +1022,12 @@ class ChessGUI:
         return (7 - rank) * 8 + file
 
     def handle_mouse_down(self, event):
-        if event.button != 1 or self.dragging:
+        if event.button != 1:
+            return
+        if self.engine_button_rect.collidepoint(event.pos):
+            self.start_engine_game()
+            return
+        if self.dragging:
             return
         square = self.square_from_pos(event.pos)
         if square is None:
@@ -915,13 +1089,25 @@ class ChessGUI:
             self.running = False
             return
         if text.lower() == "reset":
-            self.board.reset_to_startpos()
-            self.last_move = None
-            self.game_over = False
+            self.engine_epoch += 1
+            self._reset_board_state()
             self.status_message = "Reset to start position."
+            if self.play_vs_engine:
+                if self.engine_thinking:
+                    self.status_message = "Reset to start position (engine busy)."
+                    return
+                if self._ensure_engine():
+                    self._engine_send("ucinewgame")
+                    if self.board.side_to_move == self.engine_side:
+                        self._request_engine_move()
+                else:
+                    self.status_message = "Reset to start position (engine unavailable)."
             return
         if self.game_over:
             self.status_message = "Game over. Type 'reset' to restart."
+            return
+        if self.play_vs_engine and self.engine_thinking and self.board.side_to_move == self.engine_side:
+            self.status_message = f"Engine thinking (depth {self.engine_depth})..."
             return
 
         parsed = parse_uci_move(text)
@@ -937,9 +1123,15 @@ class ChessGUI:
             self.status_message = f"Invalid move: {reason}"
             return
 
+        self.apply_move(move, "Played")
+        if self.play_vs_engine and not self.game_over and self.board.side_to_move == self.engine_side:
+            self._request_engine_move()
+
+    def apply_move(self, move: Move, label: str) -> None:
         self.board.make_move(move)
         self.last_move = move
-        self.status_message = f"Played: {move.uci()}"
+        self.move_history.append(move.uci())
+        self.status_message = f"{label}: {move.uci()}"
         if self.board.is_checkmate():
             winner = "White" if self.board.side_to_move == Color.BLACK else "Black"
             self.status_message = f"Checkmate! {winner} wins. Type 'reset' to restart."
@@ -948,13 +1140,19 @@ class ChessGUI:
         if self.board.in_check(self.board.side_to_move):
             self.status_message += " (check)"
 
-        # ----------------------------------------------------------------
-        # Hook engine reply here if you want:
-        #   engine_move = engine_get_move(self.board)
-        #   self.board.make_move(engine_move)
-        #   self.last_move = engine_move
-        #   self.status_message = f"Engine: {engine_move.uci()}"
-        # ----------------------------------------------------------------
+    def apply_engine_move(self, move_text: str) -> None:
+        parsed = parse_uci_move(move_text)
+        if parsed is None:
+            self.status_message = f"Engine returned invalid move: {move_text}"
+            return
+        src, dst, promo_letter = parsed
+        promo_piece = promo_letter_to_piece(promo_letter)
+        move = Move(src, dst, promotion=promo_piece)
+        ok, reason = self.board.validate_move(move)
+        if not ok:
+            self.status_message = f"Engine move invalid: {reason}"
+            return
+        self.apply_move(move, "Engine")
 
     def draw(self):
         self.screen.fill((0, 0, 0))
@@ -1021,6 +1219,20 @@ class ChessGUI:
         stm_text = "White to move" if self.board.side_to_move == Color.WHITE else "Black to move"
         stm_surf = self.font.render(stm_text, True, (220, 220, 220))
         self.screen.blit(stm_surf, (10, panel_y + 10))
+
+        if self.engine_thinking:
+            button_color = (80, 80, 80)
+            button_text = "Engine Thinking..."
+        elif self.play_vs_engine:
+            button_color = (70, 140, 90)
+            button_text = f"Restart Engine (d{self.engine_depth})"
+        else:
+            button_color = (60, 120, 180)
+            button_text = f"Play Engine (d{self.engine_depth})"
+        pygame.draw.rect(self.screen, button_color, self.engine_button_rect, border_radius=4)
+        label_surf = self.small_font.render(button_text, True, (255, 255, 255))
+        label_rect = label_surf.get_rect(center=self.engine_button_rect.center)
+        self.screen.blit(label_surf, label_rect)
 
         # Input box
         input_label = self.small_font.render("Move (UCI):", True, (200, 200, 200))

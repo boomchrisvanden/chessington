@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, List, Optional, TextIO
 
+from src.book import PolyglotBook
 from src.core.board import Board
-from src.core.types import Color, move_from_uci
+from src.core.types import Color, Move, move_from_uci
 from src.search.iterative import iterative_deepening
 from src.search.tt import TranspositionTable
 
@@ -145,6 +147,47 @@ def _compute_time_ms(board: Board, limits: GoLimits) -> int:
     return max(0, (remaining // max(1, movestogo)) + (inc or 0))
 
 
+def _default_book_path() -> Path:
+    return Path(__file__).resolve().parents[1] / "Book.bin"
+
+
+def _parse_bool_option(value: Optional[str], default: bool) -> bool:
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if normalized in ("1", "true", "yes", "on"):
+        return True
+    if normalized in ("0", "false", "no", "off"):
+        return False
+    return default
+
+
+def _resolve_book_path(value: Optional[str], default_path: Path) -> Optional[Path]:
+    if value is None:
+        return default_path
+    cleaned = value.strip()
+    if cleaned == "":
+        return default_path
+    return Path(cleaned).expanduser()
+
+
+def _select_book_move(board: Board, book: PolyglotBook) -> Optional[Move]:
+    entries = book.lookup_board(board)
+    if not entries:
+        return None
+
+    entries.sort(key=lambda entry: entry.weight, reverse=True)
+    for entry in entries:
+        move = move_from_uci(entry.move.to_uci())
+        if move is None:
+            continue
+        ok, _ = board.validate_move(move)
+        if ok:
+            return move
+
+    return None
+
+
 def uci_loop(stdin: TextIO = sys.stdin, stdout: TextIO = sys.stdout) -> None:
     def send(line: str) -> None:
         stdout.write(line + "\n")
@@ -153,6 +196,9 @@ def uci_loop(stdin: TextIO = sys.stdin, stdout: TextIO = sys.stdout) -> None:
     board: Optional[Board] = None
     tt = TranspositionTable(size_mb=32)
     options: Dict[str, Optional[str]] = {}
+    default_book_path = _default_book_path()
+    book: Optional[PolyglotBook] = None
+    book_loaded_path: Optional[Path] = None
 
     for raw in stdin:
         line = raw.strip()
@@ -166,6 +212,8 @@ def uci_loop(stdin: TextIO = sys.stdin, stdout: TextIO = sys.stdout) -> None:
             send("id name chessington")
             send("id author Chris Vanden Boom")
             send("option name Hash type spin default 32 min 1 max 2048")
+            send("option name OwnBook type check default true")
+            send(f"option name BookFile type string default {default_book_path}")
             send("uciok")
 
         elif cmd == "isready":
@@ -189,6 +237,21 @@ def uci_loop(stdin: TextIO = sys.stdin, stdout: TextIO = sys.stdout) -> None:
             if board is None:
                 send("bestmove 0000")
                 continue
+            book_enabled = _parse_bool_option(options.get("OwnBook"), True)
+            book_path = _resolve_book_path(options.get("BookFile"), default_book_path)
+            if book_enabled and book_path is not None:
+                if book is None or book_loaded_path != book_path:
+                    try:
+                        book = PolyglotBook(str(book_path))
+                        book_loaded_path = book_path
+                    except (FileNotFoundError, ValueError):
+                        book = None
+                        book_loaded_path = None
+                if book is not None:
+                    book_move = _select_book_move(board, book)
+                    if book_move is not None:
+                        send(f"bestmove {book_move.uci()}")
+                        continue
             limits = _parse_go(args)
             max_depth = limits.depth or 1
             time_ms = _compute_time_ms(board, limits)

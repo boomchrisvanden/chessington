@@ -496,7 +496,8 @@ def compute_polyglot_hash_from_board(board) -> int:
     from a Board object and calls compute_polyglot_hash.
     
     Args:
-        board: A Board object with squares, stm, castling, ep_square attributes
+        board: A Board object with squares, side_to_move/stm, castling_rights/castling,
+            ep_square attributes
     
     Returns:
         64-bit Polyglot Zobrist hash
@@ -515,10 +516,16 @@ def compute_polyglot_hash_from_board(board) -> int:
             squares.append((int(color), int(piece_type)))
     
     # Convert side to move
-    side_to_move = int(board.stm)
-    
+    if hasattr(board, "side_to_move"):
+        side_to_move = int(board.side_to_move)
+    else:
+        side_to_move = int(board.stm)
+
     # Castling rights
-    castling_rights = int(board.castling)
+    if hasattr(board, "castling_rights"):
+        castling_rights = int(board.castling_rights)
+    else:
+        castling_rights = int(board.castling)
     
     # En passant square
     ep_square = board.ep_square
