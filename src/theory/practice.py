@@ -15,7 +15,11 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from book.polyglot_book import PolyglotBook, BookMove, BookEntry
-from book.polyglot_zobrist import compute_polyglot_hash, algebraic_to_square, square_from_file_rank
+from book.polyglot_zobrist import (
+    compute_polyglot_hash,
+    algebraic_to_square,
+    square_from_file_rank,
+)
 
 
 class DifficultyLevel(Enum):
@@ -125,21 +129,29 @@ OPENING_NAMES = {
     ("f2f4",): "Bird's Opening",
 }
 
+def get_opening_name_with_prefix(move_history: List[str]) -> Tuple[str, int]:
+    """
+    Get the name of the opening based on move history and the matched prefix length.
+    Returns (opening name, prefix length).
+    """
+    best_match = "Opening Theory"
+    best_length = 0
+    
+    for length in range(1, len(move_history) + 1):
+        prefix = tuple(move_history[:length])
+        if prefix in OPENING_NAMES:
+            best_match = OPENING_NAMES[prefix]
+            best_length = length
+    
+    return best_match, best_length
+
 
 def get_opening_name(move_history: List[str]) -> str:
     """
     Get the name of the opening based on move history.
     Returns the most specific matching opening name.
     """
-    # Try progressively longer prefixes to find the most specific match
-    best_match = "Opening Theory"
-    
-    for length in range(1, len(move_history) + 1):
-        prefix = tuple(move_history[:length])
-        if prefix in OPENING_NAMES:
-            best_match = OPENING_NAMES[prefix]
-    
-    return best_match
+    return get_opening_name_with_prefix(move_history)[0]
 
 
 @dataclass
@@ -147,8 +159,9 @@ class TheoryPracticeGame:
     """
     Manages an opening theory practice session.
     
-    The game pre-selects a complete random opening line from the book,
+    The game pre-selects a random opening line from the book,
     displays the opening name, and tests the user's knowledge.
+    Alternate book moves are allowed within the opening anchor.
     Incorrect moves result in losing a life.
     """
     book_path: str
@@ -165,6 +178,8 @@ class TheoryPracticeGame:
     lives: int = field(default=0, init=False)
     game_over: bool = field(default=False, init=False)
     current_opening_name: str = field(default="Opening Theory", init=False)
+    opening_anchor_moves: List[str] = field(default_factory=list, init=False)
+    opening_anchor_name: str = field(default="Opening Theory", init=False)
     lines_completed: int = field(default=0, init=False)
     total_correct_moves: int = field(default=0, init=False)
     rng: random.Random = field(default_factory=random.Random, init=False)
@@ -194,6 +209,8 @@ class TheoryPracticeGame:
         self.target_line = []
         self.current_move_index = 0
         self.current_opening_name = "Opening Theory"
+        self.opening_anchor_moves = []
+        self.opening_anchor_name = "Opening Theory"
     
     def _generate_random_line(self) -> List[str]:
         """
@@ -221,6 +238,43 @@ class TheoryPracticeGame:
         line = self._generate_single_line()
         self.played_lines.add(tuple(line))
         return line
+
+    def _generate_continuation_from_state(self, remaining_depth: int) -> List[str]:
+        """
+        Generate a random continuation line from the current position.
+        """
+        if remaining_depth <= 0 or self.book is None:
+            return []
+        
+        line = []
+        temp_squares = list(self.squares)
+        temp_side = self.side_to_move
+        temp_castling = self.castling_rights
+        temp_ep = self.ep_square
+        
+        for _ in range(remaining_depth):
+            key = compute_polyglot_hash(temp_squares, temp_side, temp_castling, temp_ep)
+            move = self.book.get_weighted_random_move(key, self.rng)
+            if move is None:
+                break
+            uci = move.to_uci()
+            line.append(uci)
+            temp_squares, temp_side, temp_castling, temp_ep = self._apply_move_to_state(
+                uci, temp_squares, temp_side, temp_castling, temp_ep
+            )
+        
+        return line
+
+    def _refresh_target_line_from_current_position(self) -> None:
+        """Rebuild the target line from the current position."""
+        max_depth = self._get_line_depth_limit()
+        remaining_depth = max(0, max_depth - self.current_move_index)
+        continuation = self._generate_continuation_from_state(remaining_depth)
+        self.target_line = self.move_history + continuation
+
+    def _get_line_depth_limit(self) -> int:
+        move_depth = DIFFICULTY_MOVE_DEPTH.get(self.difficulty)
+        return move_depth if move_depth is not None else 40
     
     def _generate_single_line(self) -> List[str]:
         """
@@ -236,9 +290,7 @@ class TheoryPracticeGame:
         temp_castling = 0xF
         temp_ep = None
         
-        # Get move depth limit for this difficulty
-        move_depth = DIFFICULTY_MOVE_DEPTH.get(self.difficulty)
-        max_depth = move_depth if move_depth is not None else 40
+        max_depth = self._get_line_depth_limit()
         
         for _ in range(max_depth):
             # Compute hash for current position
@@ -369,7 +421,7 @@ class TheoryPracticeGame:
             squares[to_sq] = piece
         
         return squares, 1 - side_to_move, castling_rights, new_ep
-    
+
     def _setup_startpos(self) -> None:
         """Set up the starting position."""
         self._setup_startpos_into(self.squares)
@@ -396,6 +448,29 @@ class TheoryPracticeGame:
             return False
         key = self.get_current_hash()
         return self.book.contains(key)
+
+    def _is_book_move(self, uci_move: str) -> bool:
+        """Check if the given move exists in the opening book from the current position."""
+        for move, _ in self.get_book_moves():
+            if move.to_uci() == uci_move:
+                return True
+        return False
+
+    def _matches_opening_anchor(self, move_history: List[str]) -> bool:
+        """Check if the move history stays within the opening anchor prefix."""
+        if not self.opening_anchor_moves:
+            return True
+        anchor_len = len(self.opening_anchor_moves)
+        if len(move_history) <= anchor_len:
+            return move_history == self.opening_anchor_moves[:len(move_history)]
+        return move_history[:anchor_len] == self.opening_anchor_moves
+
+    def _update_opening_name_from_history(self) -> None:
+        """Update the displayed opening name from the current move history."""
+        if self.opening_anchor_moves and len(self.move_history) < len(self.opening_anchor_moves):
+            self.current_opening_name = self.opening_anchor_name
+            return
+        self.current_opening_name = get_opening_name(self.move_history)
     
     def is_correct_move(self, uci_move: str) -> bool:
         """Check if a move matches the expected move in the target line."""
@@ -734,7 +809,7 @@ class TheoryPracticeGame:
         
         # Update move history
         self.move_history.append(uci_move)
-        # Note: opening name is set at line start based on target_line, not updated dynamically
+        self._update_opening_name_from_history()
     
     def try_player_move(self, uci_move: str) -> Optional[Tuple[bool, str]]:
         """
@@ -743,7 +818,7 @@ class TheoryPracticeGame:
         Returns:
             None if move is illegal (piece should snap back silently)
             (success, message) tuple otherwise:
-            - success: True if move was correct (matches target line)
+            - success: True if move was correct (matches target line or allowed alternate)
             - message: Feedback message
         """
         if self.game_over:
@@ -772,6 +847,19 @@ class TheoryPracticeGame:
             
             return True, "Correct!"
         else:
+            prospective_history = self.move_history + [uci_move]
+            if self._is_book_move(uci_move) and self._matches_opening_anchor(prospective_history):
+                self.make_move(uci_move)
+                self.current_move_index += 1
+                self.total_correct_moves += 1
+                self._refresh_target_line_from_current_position()
+                
+                if self.is_line_complete():
+                    self.lines_completed += 1
+                    return True, f"Correct! Line complete. ({self.lines_completed} lines)"
+                
+                return True, "Correct!"
+            
             # Wrong book move (but legal) - lose a life
             if self.lives > 0:
                 self.lives -= 1
@@ -825,8 +913,10 @@ class TheoryPracticeGame:
         self.target_line = self._generate_random_line()
         self.current_move_index = 0
         
-        # Set the opening name based on the full target line
-        self.current_opening_name = get_opening_name(self.target_line)
+        opening_name, opening_length = get_opening_name_with_prefix(self.target_line)
+        self.opening_anchor_moves = self.target_line[:opening_length]
+        self.opening_anchor_name = opening_name
+        self.current_opening_name = opening_name
         
         # If player is black, make white's first move(s)
         while self.side_to_move != self.player_color and not self.is_line_complete():

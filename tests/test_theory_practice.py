@@ -169,9 +169,22 @@ class TestTheoryPracticeGame:
         game.start_new_line()
         initial_lives = game.lives
         
-        # Make a move that is definitely wrong (not the expected move)
+        # Make a move that is legal but not in the book from the starting position
         expected_move = game.get_expected_move()
-        wrong_move = "a2a3" if expected_move != "a2a3" else "h2h3"
+        book_moves = {move.to_uci() for move, _ in game.get_book_moves()}
+        candidates = [
+            "a2a3", "a2a4", "b2b3", "b2b4", "c2c3", "c2c4",
+            "d2d3", "d2d4", "e2e3", "e2e4", "f2f3", "f2f4",
+            "g2g3", "g2g4", "h2h3", "h2h4", "b1a3", "b1c3",
+            "g1f3", "g1h3",
+        ]
+        wrong_move = None
+        for candidate in candidates:
+            if candidate != expected_move and candidate not in book_moves:
+                wrong_move = candidate
+                break
+        if wrong_move is None:
+            pytest.skip("No non-book legal move available to test wrong-move handling")
         
         success, _ = game.try_player_move(wrong_move)
         
