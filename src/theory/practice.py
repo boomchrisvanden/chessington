@@ -8,7 +8,9 @@ and tracking lives/chances for the practice mode.
 from enum import Enum, auto
 from dataclasses import dataclass, field
 from typing import Optional, List, Tuple
+import difflib
 import random
+import re
 
 import sys
 import os
@@ -129,6 +131,62 @@ OPENING_NAMES = {
     ("f2f4",): "Bird's Opening",
 }
 
+
+def normalize_opening_name(name: str) -> str:
+    """Normalize an opening name for matching."""
+    lowered = name.lower().replace("'", "")
+    cleaned = re.sub(r"[^a-z0-9]+", " ", lowered)
+    return " ".join(cleaned.split())
+
+
+def get_opening_names() -> List[str]:
+    """Return the unique set of opening names."""
+    return sorted(set(OPENING_NAMES.values()))
+
+
+def resolve_opening_name(name: str) -> Optional[str]:
+    """Resolve an opening name to the canonical casing used in the list."""
+    normalized = normalize_opening_name(name)
+    for candidate in get_opening_names():
+        if normalize_opening_name(candidate) == normalized:
+            return candidate
+    return None
+
+
+def _opening_match_score(query: str, name: str) -> float:
+    if query == name:
+        return 2.0
+    if name.startswith(query):
+        return 1.5 + (len(query) / len(name))
+    if query in name:
+        return 1.0 + (len(query) / len(name))
+    return difflib.SequenceMatcher(None, query, name).ratio()
+
+
+def find_opening_name_matches(query: str, limit: int = 8) -> List[str]:
+    """Return a list of opening names sorted by fuzzy match."""
+    names = get_opening_names()
+    normalized_query = normalize_opening_name(query)
+    if not normalized_query:
+        return names[:limit]
+    scored = []
+    for name in names:
+        normalized_name = normalize_opening_name(name)
+        score = _opening_match_score(normalized_query, normalized_name)
+        scored.append((score, name))
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    return [name for score, name in scored[:limit] if score > 0]
+
+
+def get_opening_prefixes_for_name(opening_name: str) -> List[List[str]]:
+    """Return move prefixes for a given opening name."""
+    normalized = normalize_opening_name(opening_name)
+    prefixes = []
+    for moves, name in OPENING_NAMES.items():
+        if normalize_opening_name(name) == normalized:
+            prefixes.append(list(moves))
+    return prefixes
+
 def get_opening_name_with_prefix(move_history: List[str]) -> Tuple[str, int]:
     """
     Get the name of the opening based on move history and the matched prefix length.
@@ -239,7 +297,14 @@ class TheoryPracticeGame:
         self.played_lines.add(tuple(line))
         return line
 
-    def _generate_continuation_from_state(self, remaining_depth: int) -> List[str]:
+    def _generate_continuation_from_state(
+        self,
+        remaining_depth: int,
+        squares: Optional[List[Optional[Tuple[int, int]]]] = None,
+        side_to_move: Optional[int] = None,
+        castling_rights: Optional[int] = None,
+        ep_square: Optional[int] = None,
+    ) -> List[str]:
         """
         Generate a random continuation line from the current position.
         """
@@ -247,10 +312,10 @@ class TheoryPracticeGame:
             return []
         
         line = []
-        temp_squares = list(self.squares)
-        temp_side = self.side_to_move
-        temp_castling = self.castling_rights
-        temp_ep = self.ep_square
+        temp_squares = list(self.squares if squares is None else squares)
+        temp_side = self.side_to_move if side_to_move is None else side_to_move
+        temp_castling = self.castling_rights if castling_rights is None else castling_rights
+        temp_ep = self.ep_square if ep_square is None else ep_square
         
         for _ in range(remaining_depth):
             key = compute_polyglot_hash(temp_squares, temp_side, temp_castling, temp_ep)
@@ -312,6 +377,65 @@ class TheoryPracticeGame:
             )
         
         return line
+
+    def _get_state_after_prefix(
+        self,
+        prefix: List[str]
+    ) -> Optional[Tuple[List[Optional[Tuple[int, int]]], int, int, Optional[int]]]:
+        """Return the position state after applying the prefix, if it exists in the book."""
+        if self.book is None:
+            return None
+        
+        temp_squares = [None] * 64
+        self._setup_startpos_into(temp_squares)
+        temp_side = 0
+        temp_castling = 0xF
+        temp_ep = None
+        
+        for uci in prefix:
+            key = compute_polyglot_hash(temp_squares, temp_side, temp_castling, temp_ep)
+            book_moves = self.book.get_all_moves(key)
+            if not any(move.to_uci() == uci for move, _ in book_moves):
+                return None
+            temp_squares, temp_side, temp_castling, temp_ep = self._apply_move_to_state(
+                uci, temp_squares, temp_side, temp_castling, temp_ep
+            )
+        
+        return temp_squares, temp_side, temp_castling, temp_ep
+
+    def _build_line_for_opening(
+        self,
+        opening_name: str
+    ) -> Optional[Tuple[List[str], List[str], str]]:
+        """Build a target line for a selected opening name."""
+        canonical = resolve_opening_name(opening_name)
+        if canonical is None:
+            return None
+        
+        prefixes = get_opening_prefixes_for_name(canonical)
+        if not prefixes:
+            return None
+        
+        self.rng.shuffle(prefixes)
+        max_depth = self._get_line_depth_limit()
+        
+        for prefix in prefixes:
+            state = self._get_state_after_prefix(prefix)
+            if state is None:
+                continue
+            remaining_depth = max(0, max_depth - len(prefix))
+            continuation = self._generate_continuation_from_state(
+                remaining_depth,
+                squares=state[0],
+                side_to_move=state[1],
+                castling_rights=state[2],
+                ep_square=state[3],
+            )
+            line = prefix + continuation
+            if line:
+                return line, prefix, canonical
+        
+        return None
     
     def _setup_startpos_into(self, squares: List[Optional[Tuple[int, int]]]) -> None:
         """Set up the starting position into the given squares list."""
@@ -921,15 +1045,41 @@ class TheoryPracticeGame:
         # If player is black, make white's first move(s)
         while self.side_to_move != self.player_color and not self.is_line_complete():
             self.make_opponent_move()
+
+    def start_new_line_for_opening(self, opening_name: str) -> bool:
+        """Start a new opening line matching the selected opening name."""
+        if self.game_over:
+            return False
+        
+        built = self._build_line_for_opening(opening_name)
+        if built is None:
+            return False
+        
+        target_line, anchor_moves, canonical_name = built
+        self._reset_position()
+        self.target_line = target_line
+        self.current_move_index = 0
+        self.opening_anchor_moves = list(anchor_moves)
+        self.opening_anchor_name = canonical_name
+        self.current_opening_name = canonical_name
+        
+        while self.side_to_move != self.player_color and not self.is_line_complete():
+            self.make_opponent_move()
+        
+        return True
     
-    def reset_game(self) -> None:
+    def reset_game(self, opening_name: Optional[str] = None) -> None:
         """Reset the entire game (including lives and played lines history)."""
         self.lives = DIFFICULTY_LIVES[self.difficulty]
         self.game_over = False
         self.lines_completed = 0
         self.total_correct_moves = 0
         self.played_lines.clear()  # Clear played lines for fresh start
-        self.start_new_line()
+        if opening_name is not None:
+            if not self.start_new_line_for_opening(opening_name):
+                self.start_new_line()
+        else:
+            self.start_new_line()
     
     def get_lives_display(self) -> str:
         """Get a display string for remaining lives."""

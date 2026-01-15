@@ -13,7 +13,11 @@ from typing import Optional, Tuple, List
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from theory.practice import TheoryPracticeGame, DifficultyLevel
+from theory.practice import (
+    TheoryPracticeGame,
+    DifficultyLevel,
+    find_opening_name_matches,
+)
 from book.polyglot_zobrist import algebraic_to_square, square_to_algebraic
 
 
@@ -38,7 +42,8 @@ class TheoryPracticeGUI:
         book_path: str,
         piece_dir: str,
         difficulty: DifficultyLevel,
-        player_color: int
+        player_color: int,
+        search_mode: bool = False,
     ):
         pygame.init()
         pygame.display.set_caption("Opening Theory Practice")
@@ -70,6 +75,14 @@ class TheoryPracticeGUI:
         self.drag_piece: Optional[Tuple[int, int]] = None
         self.drag_pos = (0, 0)
         self.last_move: Optional[Tuple[int, int]] = None
+        self.search_enabled = search_mode
+        self.search_active = False
+        self.search_query = ""
+        self.search_results: List[str] = []
+        self.search_result_rects: List[Tuple[pygame.Rect, int, str]] = []
+        self.search_selected_index = 0
+        self.search_previous_status = ""
+        self.selected_opening_name: Optional[str] = None
         
         # Flip board if playing as black
         self.flip_board = (player_color == 1)
@@ -87,6 +100,7 @@ class TheoryPracticeGUI:
         self.menu_button_rect = pygame.Rect(120, panel_y + 75, 100, 32)
         self.quit_button_rect = pygame.Rect(230, panel_y + 75, 100, 32)
         self.new_line_button_rect = pygame.Rect(340, panel_y + 75, 120, 32)
+        self.search_button_rect = pygame.Rect(470, panel_y + 75, 120, 32)
         
         # Transition timer for showing success message before new line
         self.transition_timer: Optional[int] = None  # Timestamp when transition started
@@ -101,7 +115,10 @@ class TheoryPracticeGUI:
         
         # Start the first line
         self.game.start_new_line()
-        self._check_opponent_turn()
+        if self.search_enabled:
+            self._open_search()
+        else:
+            self._check_opponent_turn()
     
     def load_piece_images(self, piece_dir: str):
         """Load piece images from directory."""
@@ -226,7 +243,7 @@ class TheoryPracticeGUI:
                 
                 # Check if line is now complete after opponent's move
                 if self.game.is_line_complete():
-                    self._start_line_transition(player_completed=False)
+                    self._on_line_complete(player_completed=False)
     
     def _start_line_transition(self, player_completed: bool = False) -> None:
         """
@@ -261,10 +278,120 @@ class TheoryPracticeGUI:
     def _can_skip_line(self) -> bool:
         """Check if the player can manually skip to a new line (only in infinite mode)."""
         return self.game.difficulty == DifficultyLevel.INFINITE and not self.game.game_over
+
+    def _in_opening_practice(self) -> bool:
+        """Check if we're practicing a selected opening name."""
+        return self.selected_opening_name is not None
+
+    def _refresh_search_results(self, reset_selection: bool = False) -> None:
+        """Refresh fuzzy search results based on the current query."""
+        self.search_results = find_opening_name_matches(self.search_query, limit=8)
+        if reset_selection or self.search_selected_index >= len(self.search_results):
+            self.search_selected_index = 0
+
+    def _open_search(self) -> None:
+        """Open the opening search overlay."""
+        if not self.search_enabled:
+            return
+        if self.game.game_over:
+            self.status_message = "Game over! Press Reset to try again."
+            return
+        self.search_active = True
+        self.search_query = ""
+        self._refresh_search_results(reset_selection=True)
+        self.search_result_rects = []
+        self.search_previous_status = self.status_message
+        self.status_message = "Search for an opening to practice."
+        self.transition_timer = None
+        self.dragging = False
+        self.drag_from = None
+        self.drag_piece = None
+
+    def _close_search(self) -> None:
+        """Close the opening search overlay."""
+        self.search_active = False
+        self.search_result_rects = []
+        if self.search_previous_status:
+            self.status_message = self.search_previous_status
+        self._check_opponent_turn()
+
+    def _select_search_result(self, opening_name: str) -> None:
+        """Start practicing the selected opening."""
+        if not self.game.start_new_line_for_opening(opening_name):
+            self.status_message = f"No book lines found for {opening_name}."
+            return
+        self.selected_opening_name = opening_name
+        self.search_active = False
+        self.last_move = None
+        self.transition_timer = None
+        self.status_message = f"New line: {self.game.current_opening_name}"
+        self._check_opponent_turn()
+
+    def _restart_selected_line(self) -> None:
+        """Restart the current opening line."""
+        if self.selected_opening_name is None:
+            return
+        if not self.game.start_new_line_for_opening(self.selected_opening_name):
+            self.status_message = f"No book lines found for {self.selected_opening_name}."
+            return
+        self.last_move = None
+        self.transition_timer = None
+        self.status_message = f"New line: {self.game.current_opening_name}"
+        self._check_opponent_turn()
+
+    def _handle_search_key(self, event) -> None:
+        """Handle keyboard input while search overlay is active."""
+        if event.key == pygame.K_ESCAPE:
+            self._close_search()
+            return
+        if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+            if self.search_results:
+                index = min(self.search_selected_index, len(self.search_results) - 1)
+                self._select_search_result(self.search_results[index])
+            return
+        if event.key in (pygame.K_UP, pygame.K_DOWN):
+            if self.search_results:
+                delta = -1 if event.key == pygame.K_UP else 1
+                self.search_selected_index = (
+                    self.search_selected_index + delta
+                ) % len(self.search_results)
+            return
+        if event.key == pygame.K_BACKSPACE:
+            self.search_query = self.search_query[:-1]
+            self._refresh_search_results(reset_selection=True)
+            return
+        if event.unicode and event.unicode.isprintable():
+            if len(self.search_query) < 40:
+                self.search_query += event.unicode
+                self._refresh_search_results(reset_selection=True)
+
+    def _handle_search_click(self, pos: Tuple[int, int]) -> None:
+        """Handle mouse clicks on search results."""
+        for rect, index, opening_name in self.search_result_rects:
+            if rect.collidepoint(pos):
+                self.search_selected_index = index
+                self._select_search_result(opening_name)
+                return
+
+    def _on_line_complete(self, player_completed: bool) -> None:
+        """Handle line completion based on current practice mode."""
+        if self._in_opening_practice():
+            if not player_completed:
+                self.game.lines_completed += 1
+            self.status_message = (
+                f"Line complete! ({self.game.lines_completed} lines) "
+                "Restart the line or search again."
+            )
+            return
+        self._start_line_transition(player_completed=player_completed)
     
     def handle_mouse_down(self, event) -> None:
         """Handle mouse button down event."""
         if event.button != 1:
+            return
+
+        if self.search_active:
+            self._handle_search_click(event.pos)
             return
         
         # Don't process input during transition
@@ -275,9 +402,13 @@ class TheoryPracticeGUI:
         # Reset button - only works when game is over
         if self.reset_button_rect.collidepoint(event.pos):
             if self.game.game_over:
-                self.game.reset_game()
+                if self._in_opening_practice():
+                    self.game.reset_game(self.selected_opening_name)
+                    self.status_message = f"New line: {self.game.current_opening_name}"
+                else:
+                    self.game.reset_game()
+                    self.status_message = "Game reset. Make a book move!"
                 self.last_move = None
-                self.status_message = "Game reset. Make a book move!"
                 self._check_opponent_turn()
             return
         
@@ -290,13 +421,21 @@ class TheoryPracticeGUI:
         if self.quit_button_rect.collidepoint(event.pos):
             self.running = False
             return
+
+        if self.search_enabled and self.search_button_rect.collidepoint(event.pos):
+            self._open_search()
+            return
         
-        # New Line button - only in infinite mode
-        if self.new_line_button_rect.collidepoint(event.pos) and self._can_skip_line():
-            self.game.start_new_line()
-            self.last_move = None
-            self.status_message = f"New line: {self.game.current_opening_name}"
-            self._check_opponent_turn()
+        if self.new_line_button_rect.collidepoint(event.pos):
+            if self._in_opening_practice():
+                if self.game.is_line_complete() and not self.game.game_over:
+                    self._restart_selected_line()
+                return
+            if self._can_skip_line():
+                self.game.start_new_line()
+                self.last_move = None
+                self.status_message = f"New line: {self.game.current_opening_name}"
+                self._check_opponent_turn()
             return
         
         if self.game.game_over:
@@ -327,12 +466,16 @@ class TheoryPracticeGUI:
     
     def handle_mouse_motion(self, event) -> None:
         """Handle mouse motion event."""
+        if self.search_active:
+            return
         if not self.dragging:
             return
         self.drag_pos = event.pos
     
     def handle_mouse_up(self, event) -> None:
         """Handle mouse button up event."""
+        if self.search_active:
+            return
         if event.button != 1 or not self.dragging:
             return
         
@@ -383,9 +526,8 @@ class TheoryPracticeGUI:
             
             # Check if line is complete
             if self.game.is_line_complete():
-                # Start transition to show success message
                 # lines_completed already incremented by try_player_move
-                self._start_line_transition(player_completed=True)
+                self._on_line_complete(player_completed=True)
             else:
                 # Continue with opponent's turn
                 self._check_opponent_turn()
@@ -396,6 +538,8 @@ class TheoryPracticeGUI:
         self.draw_header()
         self.draw_board()
         self.draw_info_panel()
+        if self.search_active:
+            self.draw_search_overlay()
     
     def draw_header(self) -> None:
         """Draw the header with opening name."""
@@ -539,14 +683,88 @@ class TheoryPracticeGUI:
         quit_label = self.small_font.render("Quit", True, (255, 255, 255))
         quit_label_rect = quit_label.get_rect(center=self.quit_button_rect.center)
         self.screen.blit(quit_label, quit_label_rect)
+
+        if self.search_enabled:
+            search_active = not self.game.game_over
+            if self._in_opening_practice() and self.game.is_line_complete():
+                search_text = "Search Again"
+            else:
+                search_text = "Search"
+            search_color = (100, 120, 160) if search_active else (60, 60, 80)
+            pygame.draw.rect(self.screen, search_color, self.search_button_rect, border_radius=4)
+            search_label = self.small_font.render(
+                search_text,
+                True,
+                (255, 255, 255) if search_active else (120, 120, 120),
+            )
+            search_label_rect = search_label.get_rect(center=self.search_button_rect.center)
+            self.screen.blit(search_label, search_label_rect)
         
-        # New Line button - only in infinite mode (practice mode)
-        if self._can_skip_line():
+        if self._in_opening_practice():
+            restart_active = self.game.is_line_complete() and not self.game.game_over
+            restart_color = (80, 140, 80) if restart_active else (60, 60, 80)
+            pygame.draw.rect(self.screen, restart_color, self.new_line_button_rect, border_radius=4)
+            restart_label = self.small_font.render(
+                "Restart Line",
+                True,
+                (255, 255, 255) if restart_active else (120, 120, 120),
+            )
+            restart_label_rect = restart_label.get_rect(center=self.new_line_button_rect.center)
+            self.screen.blit(restart_label, restart_label_rect)
+        elif self._can_skip_line():
             new_line_color = (80, 140, 80)
             pygame.draw.rect(self.screen, new_line_color, self.new_line_button_rect, border_radius=4)
             new_line_label = self.small_font.render("Skip Line", True, (255, 255, 255))
             new_line_label_rect = new_line_label.get_rect(center=self.new_line_button_rect.center)
             self.screen.blit(new_line_label, new_line_label_rect)
+
+    def draw_search_overlay(self) -> None:
+        """Draw the opening search overlay."""
+        overlay = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 170))
+        self.screen.blit(overlay, (0, 0))
+
+        panel_rect = pygame.Rect(60, 60, self.width - 120, self.height - 120)
+        pygame.draw.rect(self.screen, (45, 50, 60), panel_rect, border_radius=8)
+        pygame.draw.rect(self.screen, (90, 110, 140), panel_rect, 2, border_radius=8)
+
+        title = self.header_font.render("Search Openings", True, (240, 240, 240))
+        self.screen.blit(title, (panel_rect.x + 20, panel_rect.y + 15))
+
+        query_label = self.small_font.render("Query:", True, (200, 200, 200))
+        self.screen.blit(query_label, (panel_rect.x + 20, panel_rect.y + 55))
+
+        display_query = self.search_query
+        if len(display_query) > 30:
+            display_query = "..." + display_query[-27:]
+        query_text = display_query if display_query else "Type to search..."
+        query_color = (255, 255, 255) if display_query else (150, 150, 150)
+        query_surf = self.font.render(query_text, True, query_color)
+        self.screen.blit(query_surf, (panel_rect.x + 20, panel_rect.y + 75))
+
+        self.search_result_rects = []
+        results_y = panel_rect.y + 120
+        for idx, name in enumerate(self.search_results):
+            rect = pygame.Rect(panel_rect.x + 20, results_y + idx * 32, panel_rect.w - 40, 28)
+            is_selected = idx == self.search_selected_index
+            color = (90, 120, 160) if is_selected else (55, 65, 80)
+            pygame.draw.rect(self.screen, color, rect, border_radius=4)
+            if is_selected:
+                pygame.draw.rect(self.screen, (160, 190, 220), rect, 2, border_radius=4)
+            label = self.small_font.render(name, True, (230, 230, 230))
+            self.screen.blit(label, (rect.x + 8, rect.y + 5))
+            self.search_result_rects.append((rect, idx, name))
+
+        if not self.search_results:
+            empty_label = self.small_font.render("No matches found.", True, (200, 150, 150))
+            self.screen.blit(empty_label, (panel_rect.x + 20, results_y))
+
+        hint = self.small_font.render(
+            "Up/Down: navigate | Enter: select | Esc: close",
+            True,
+            (180, 180, 180),
+        )
+        self.screen.blit(hint, (panel_rect.x + 20, panel_rect.bottom - 30))
     
     def run(self) -> bool:
         """
@@ -571,14 +789,21 @@ class TheoryPracticeGUI:
                 elif event.type == pygame.MOUSEMOTION:
                     self.handle_mouse_motion(event)
                 elif event.type == pygame.KEYDOWN:
+                    if self.search_active:
+                        self._handle_search_key(event)
+                        continue
                     if event.key == pygame.K_ESCAPE:
                         self.return_to_menu = True
                         self.running = False
                     elif event.key == pygame.K_r and self.game.game_over:
                         # Reset only works when game is over
-                        self.game.reset_game()
+                        if self._in_opening_practice():
+                            self.game.reset_game(self.selected_opening_name)
+                            self.status_message = f"New line: {self.game.current_opening_name}"
+                        else:
+                            self.game.reset_game()
+                            self.status_message = "Game reset. Make a book move!"
                         self.last_move = None
-                        self.status_message = "Game reset. Make a book move!"
                         self._check_opponent_turn()
                     elif event.key == pygame.K_n and self._can_skip_line():
                         # Skip line only in infinite/practice mode
@@ -586,6 +811,9 @@ class TheoryPracticeGUI:
                         self.last_move = None
                         self.status_message = f"New line: {self.game.current_opening_name}"
                         self._check_opponent_turn()
+                    elif event.key == pygame.K_f and self.search_enabled:
+                        # 'f' for find
+                        self._open_search()
                     elif event.key == pygame.K_m:
                         # 'm' for menu
                         self.return_to_menu = True
@@ -601,7 +829,8 @@ def run_theory_practice(
     book_path: str,
     piece_dir: str,
     difficulty: DifficultyLevel,
-    player_color: int
+    player_color: int,
+    search_mode: bool = False,
 ) -> bool:
     """
     Launch the theory practice GUI.
@@ -611,6 +840,7 @@ def run_theory_practice(
         piece_dir: Path to directory containing piece images
         difficulty: Selected difficulty level
         player_color: 0 for white, 1 for black
+        search_mode: True to start in opening search mode
     
     Returns:
         True if user wants to return to main menu, False to quit entirely
@@ -619,6 +849,7 @@ def run_theory_practice(
         book_path=book_path,
         piece_dir=piece_dir,
         difficulty=difficulty,
-        player_color=player_color
+        player_color=player_color,
+        search_mode=search_mode,
     )
     return gui.run()

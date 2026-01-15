@@ -20,7 +20,11 @@ from theory.practice import (
     DifficultyLevel,
     DIFFICULTY_LIVES,
     DIFFICULTY_MOVE_DEPTH,
+    find_opening_name_matches,
     get_opening_name,
+    get_opening_names,
+    normalize_opening_name,
+    resolve_opening_name,
 )
 
 
@@ -71,6 +75,27 @@ class TestDifficultyLives:
     
     def test_insane_lives(self):
         assert DIFFICULTY_LIVES[DifficultyLevel.INSANE] == 1
+
+
+class TestOpeningSearch:
+    """Test opening search helpers."""
+    
+    def test_opening_names_contains_known(self):
+        names = get_opening_names()
+        assert "Slav Defense" in names
+        assert "Sicilian Defense" in names
+    
+    def test_normalize_opening_name(self):
+        assert normalize_opening_name("King's Pawn") == "kings pawn"
+    
+    def test_find_opening_name_matches(self):
+        matches = find_opening_name_matches("slav")
+        assert "Slav Defense" in matches
+        matches = find_opening_name_matches("sicillian")
+        assert "Sicilian Defense" in matches
+    
+    def test_resolve_opening_name(self):
+        assert resolve_opening_name("slav defense") == "Slav Defense"
 
 
 class TestTheoryPracticeGame:
@@ -131,6 +156,22 @@ class TestTheoryPracticeGame:
         game.start_new_line()
         assert len(game.target_line) > 0
         assert game.current_opening_name != "Opening Theory"
+
+    def test_start_new_line_for_opening(self, book_path):
+        """Test that a target line is generated for a specific opening name."""
+        if not os.path.exists(book_path):
+            pytest.skip("Main book file not found")
+        
+        game = TheoryPracticeGame(
+            book_path=book_path,
+            difficulty=DifficultyLevel.EASY,
+            player_color=0
+        )
+        
+        started = game.start_new_line_for_opening("King's Pawn")
+        assert started
+        assert game.opening_anchor_name == "King's Pawn"
+        assert game.opening_anchor_moves[:1] == ["e2e4"]
     
     def test_correct_move_increments_score(self, book_path):
         """Test that correct moves increment the score."""

@@ -1388,10 +1388,11 @@ class MainMenu(MenuScreen):
     
     def __init__(self):
         super().__init__(width=640, height=480, title="Chessington")
-        self.add_option("Local Game", 150)
-        self.add_option("Play Against Engine", 220)
-        self.add_option("Theory Practice", 290)
-        self.add_option("Exit", 380)
+        self.add_option("Local Game", 130)
+        self.add_option("Play Against Engine", 200)
+        self.add_option("Theory Practice", 270)
+        self.add_option("Opening Search Practice", 340)
+        self.add_option("Exit", 410)
 
 
 class ColorSelectionMenu(MenuScreen):
@@ -1499,9 +1500,17 @@ def run_engine_game(piece_dir: str, player_color: Color) -> bool:
     return gui.run()
 
 
-def run_theory_game(piece_dir: str, book_path: str, difficulty: DifficultyLevel, player_color: int) -> bool:
+def run_theory_game(
+    piece_dir: str,
+    book_path: str,
+    difficulty: DifficultyLevel,
+    player_color: int,
+    search_mode: bool = False,
+) -> bool:
     """
     Run a theory practice game.
+
+    search_mode enables the opening search overlay at startup.
     
     Returns:
         True if user wants to return to main menu, False to quit entirely
@@ -1510,7 +1519,8 @@ def run_theory_game(piece_dir: str, book_path: str, difficulty: DifficultyLevel,
         book_path=book_path,
         piece_dir=piece_dir,
         difficulty=difficulty,
-        player_color=player_color
+        player_color=player_color,
+        search_mode=search_mode,
     )
 
 
@@ -1575,7 +1585,49 @@ def main():
             }
             
             difficulty = difficulty_map.get(diff_choice, DifficultyLevel.MEDIUM)
-            return_to_menu = run_theory_game(piece_dir, book_path, difficulty, player_color)
+            return_to_menu = run_theory_game(
+                piece_dir,
+                book_path,
+                difficulty,
+                player_color,
+            )
+            if not return_to_menu:
+                break
+
+        elif choice == "Opening Search Practice":
+            # Show color selection first
+            color_menu = ColorSelectionMenu(title="Opening Search Practice - Color")
+            color_choice = color_menu.run()
+
+            if color_choice in ("Back", "back", "quit", None):
+                continue
+
+            player_color = 0 if color_choice == "Play as White" else 1
+
+            # Show difficulty selection
+            diff_menu = DifficultyMenu()
+            diff_choice = diff_menu.run()
+
+            if diff_choice in ("Back", "back", "quit", None):
+                continue
+
+            # Map choice to difficulty level
+            difficulty_map = {
+                "Infinite (∞ chances)": DifficultyLevel.INFINITE,
+                "Easy (10 chances)": DifficultyLevel.EASY,
+                "Medium (5 chances)": DifficultyLevel.MEDIUM,
+                "Hard (3 chances)": DifficultyLevel.HARD,
+                "Insane (1 chance)": DifficultyLevel.INSANE,
+            }
+
+            difficulty = difficulty_map.get(diff_choice, DifficultyLevel.MEDIUM)
+            return_to_menu = run_theory_game(
+                piece_dir,
+                book_path,
+                difficulty,
+                player_color,
+                search_mode=True,
+            )
             if not return_to_menu:
                 break
     
