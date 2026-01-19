@@ -32,16 +32,90 @@ class MoveUndo:
 
 class Board:
     def __init__(self) -> None:
-        self.squares: List[Optional[Piece]] = [None] * 64
+        self._clear_board()
         self.side_to_move: Color = Color.WHITE
         self.castling_rights: CastlingRights = CastlingRights.NONE
         self.ep_square: Optional[int] = None
         self.halfmove_clock: int = 0
         self.fullmove_number: int = 1
         self.hash: int = 0
+        self._recompute_hash()
+
+    @property
+    def squares(self) -> List[Optional[Piece]]:
+        return self._squares
+
+    @squares.setter
+    def squares(self, value: List[Optional[Piece]]) -> None:
+        if len(value) != 64:
+            raise ValueError("squares must be length 64")
+        self._squares = value
+        self._rebuild_bitboards()
+
+    def _clear_board(self) -> None:
+        self._squares: List[Optional[Piece]] = [None] * 64
+        self.piece_bb: List[List[int]] = [[0] * 7 for _ in range(2)]
+        self.occ_bb: List[int] = [0, 0]
+        self.occ_all: int = 0
         self.white_king_sq: Optional[int] = None
         self.black_king_sq: Optional[int] = None
-        self._recompute_hash()
+
+    def _bb_add(self, color: Color, pt: PieceType, sq: int) -> None:
+        bit = 1 << sq
+        c = int(color)
+        p = int(pt)
+        self.piece_bb[c][p] |= bit
+        self.occ_bb[c] |= bit
+        self.occ_all |= bit
+
+    def _bb_remove(self, color: Color, pt: PieceType, sq: int) -> None:
+        bit = 1 << sq
+        c = int(color)
+        p = int(pt)
+        self.piece_bb[c][p] &= ~bit
+        self.occ_bb[c] &= ~bit
+        self.occ_all &= ~bit
+
+    def _rebuild_bitboards(self) -> None:
+        self.piece_bb = [[0] * 7 for _ in range(2)]
+        self.occ_bb = [0, 0]
+        self.occ_all = 0
+        self.white_king_sq = None
+        self.black_king_sq = None
+        for sq, piece in enumerate(self._squares):
+            if piece is None:
+                continue
+            color, pt = piece
+            self._bb_add(color, pt, sq)
+            if pt == PieceType.KING:
+                if color == Color.WHITE:
+                    self.white_king_sq = sq
+                else:
+                    self.black_king_sq = sq
+
+    def _clear_square(self, sq: int) -> Optional[Piece]:
+        piece = self.squares[sq]
+        if piece is None:
+            return None
+        color, pt = piece
+        self._bb_remove(color, pt, sq)
+        self.squares[sq] = None
+        if pt == PieceType.KING:
+            if color == Color.WHITE:
+                self.white_king_sq = None
+            else:
+                self.black_king_sq = None
+        return piece
+
+    def _place_piece(self, sq: int, piece: Piece) -> None:
+        color, pt = piece
+        self.squares[sq] = piece
+        self._bb_add(color, pt, sq)
+        if pt == PieceType.KING:
+            if color == Color.WHITE:
+                self.white_king_sq = sq
+            else:
+                self.black_king_sq = sq
 
     @staticmethod
     def from_startpos() -> "Board":
@@ -53,7 +127,7 @@ class Board:
         self._setup_startpos()
 
     def _setup_startpos(self) -> None:
-        self.squares = [None] * 64
+        self._clear_board()
         self.ep_square = None
         self.halfmove_clock = 0
         self.fullmove_number = 1
@@ -63,30 +137,32 @@ class Board:
         )
 
         # White pieces
-        self.squares[str_to_square("a1")] = (Color.WHITE, PieceType.ROOK)
-        self.squares[str_to_square("b1")] = (Color.WHITE, PieceType.KNIGHT)
-        self.squares[str_to_square("c1")] = (Color.WHITE, PieceType.BISHOP)
-        self.squares[str_to_square("d1")] = (Color.WHITE, PieceType.QUEEN)
-        self.squares[str_to_square("e1")] = (Color.WHITE, PieceType.KING)
-        self.white_king_sq = str_to_square("e1")
-        self.squares[str_to_square("f1")] = (Color.WHITE, PieceType.BISHOP)
-        self.squares[str_to_square("g1")] = (Color.WHITE, PieceType.KNIGHT)
-        self.squares[str_to_square("h1")] = (Color.WHITE, PieceType.ROOK)
+        self._place_piece(str_to_square("a1"), (Color.WHITE, PieceType.ROOK))
+        self._place_piece(str_to_square("b1"), (Color.WHITE, PieceType.KNIGHT))
+        self._place_piece(str_to_square("c1"), (Color.WHITE, PieceType.BISHOP))
+        self._place_piece(str_to_square("d1"), (Color.WHITE, PieceType.QUEEN))
+        self._place_piece(str_to_square("e1"), (Color.WHITE, PieceType.KING))
+        self._place_piece(str_to_square("f1"), (Color.WHITE, PieceType.BISHOP))
+        self._place_piece(str_to_square("g1"), (Color.WHITE, PieceType.KNIGHT))
+        self._place_piece(str_to_square("h1"), (Color.WHITE, PieceType.ROOK))
         for file_char in "abcdefgh":
-            self.squares[str_to_square(f"{file_char}2")] = (Color.WHITE, PieceType.PAWN)
+            self._place_piece(
+                str_to_square(f"{file_char}2"), (Color.WHITE, PieceType.PAWN)
+            )
 
         # Black pieces
-        self.squares[str_to_square("a8")] = (Color.BLACK, PieceType.ROOK)
-        self.squares[str_to_square("b8")] = (Color.BLACK, PieceType.KNIGHT)
-        self.squares[str_to_square("c8")] = (Color.BLACK, PieceType.BISHOP)
-        self.squares[str_to_square("d8")] = (Color.BLACK, PieceType.QUEEN)
-        self.squares[str_to_square("e8")] = (Color.BLACK, PieceType.KING)
-        self.black_king_sq = str_to_square("e8")
-        self.squares[str_to_square("f8")] = (Color.BLACK, PieceType.BISHOP)
-        self.squares[str_to_square("g8")] = (Color.BLACK, PieceType.KNIGHT)
-        self.squares[str_to_square("h8")] = (Color.BLACK, PieceType.ROOK)
+        self._place_piece(str_to_square("a8"), (Color.BLACK, PieceType.ROOK))
+        self._place_piece(str_to_square("b8"), (Color.BLACK, PieceType.KNIGHT))
+        self._place_piece(str_to_square("c8"), (Color.BLACK, PieceType.BISHOP))
+        self._place_piece(str_to_square("d8"), (Color.BLACK, PieceType.QUEEN))
+        self._place_piece(str_to_square("e8"), (Color.BLACK, PieceType.KING))
+        self._place_piece(str_to_square("f8"), (Color.BLACK, PieceType.BISHOP))
+        self._place_piece(str_to_square("g8"), (Color.BLACK, PieceType.KNIGHT))
+        self._place_piece(str_to_square("h8"), (Color.BLACK, PieceType.ROOK))
         for file_char in "abcdefgh":
-            self.squares[str_to_square(f"{file_char}7")] = (Color.BLACK, PieceType.PAWN)
+            self._place_piece(
+                str_to_square(f"{file_char}7"), (Color.BLACK, PieceType.PAWN)
+            )
 
         self._recompute_hash()
 
@@ -116,9 +192,7 @@ class Board:
         piece_placement, stm, castling, ep, halfmove, fullmove = parts
 
         b = Board()
-        b.squares = [None] * 64
-        b.white_king_sq = None
-        b.black_king_sq = None
+        b._clear_board()
 
         ranks = piece_placement.split("/")
         if len(ranks) != 8:
@@ -147,12 +221,7 @@ class Board:
                 color = Color.WHITE if ch.isupper() else Color.BLACK
                 if not (0 <= file < 8):
                     raise ValueError(f"invalid FEN file overflow: {fen!r}")
-                b.squares[rank * 8 + file] = (color, pt)
-                if pt == PieceType.KING:
-                    if color == Color.WHITE:
-                        b.white_king_sq = rank * 8 + file
-                    else:
-                        b.black_king_sq = rank * 8 + file
+                b._place_piece(rank * 8 + file, (color, pt))
                 file += 1
 
             if file != 8:
@@ -751,10 +820,11 @@ class Board:
                 captured_piece = self.squares[captured_sq]
                 if captured_piece is not None:
                     self._toggle_piece(captured_piece[0], captured_piece[1], captured_sq)
-                self.squares[captured_sq] = None
+                self._clear_square(captured_sq)
         elif captured_piece is not None:
             self._toggle_piece(captured_piece[0], captured_piece[1], move.to_sq)
             captured_sq = move.to_sq
+            self._clear_square(move.to_sq)
 
         if pt == PieceType.KING:
             if color == Color.WHITE and move.from_sq == str_to_square("e1"):
@@ -768,15 +838,10 @@ class Board:
                 elif move.to_sq == str_to_square("c8"):
                     self._move_piece(str_to_square("a8"), str_to_square("d8"))
 
-        self.squares[move.from_sq] = None
+        self._clear_square(move.from_sq)
         new_pt = move.promotion if (pt == PieceType.PAWN and move.promotion is not None) else pt
-        self.squares[move.to_sq] = (color, new_pt)
+        self._place_piece(move.to_sq, (color, new_pt))
         self._toggle_piece(color, new_pt, move.to_sq)
-        if pt == PieceType.KING:
-            if color == Color.WHITE:
-                self.white_king_sq = move.to_sq
-            else:
-                self.black_king_sq = move.to_sq
 
         # Update castling rights (move/capture from starting rook squares, king moves).
         if pt == PieceType.KING:
@@ -838,33 +903,28 @@ class Board:
         self.halfmove_clock = undo.halfmove_clock
         self.fullmove_number = undo.fullmove_number
 
-        self.squares[move.to_sq] = None
+        self._clear_square(move.to_sq)
 
         if pt == PieceType.KING:
             if color == Color.WHITE and move.from_sq == str_to_square("e1"):
                 if move.to_sq == str_to_square("g1"):
-                    self.squares[str_to_square("h1")] = (Color.WHITE, PieceType.ROOK)
-                    self.squares[str_to_square("f1")] = None
+                    self._clear_square(str_to_square("f1"))
+                    self._place_piece(str_to_square("h1"), (Color.WHITE, PieceType.ROOK))
                 elif move.to_sq == str_to_square("c1"):
-                    self.squares[str_to_square("a1")] = (Color.WHITE, PieceType.ROOK)
-                    self.squares[str_to_square("d1")] = None
+                    self._clear_square(str_to_square("d1"))
+                    self._place_piece(str_to_square("a1"), (Color.WHITE, PieceType.ROOK))
             elif color == Color.BLACK and move.from_sq == str_to_square("e8"):
                 if move.to_sq == str_to_square("g8"):
-                    self.squares[str_to_square("h8")] = (Color.BLACK, PieceType.ROOK)
-                    self.squares[str_to_square("f8")] = None
+                    self._clear_square(str_to_square("f8"))
+                    self._place_piece(str_to_square("h8"), (Color.BLACK, PieceType.ROOK))
                 elif move.to_sq == str_to_square("c8"):
-                    self.squares[str_to_square("a8")] = (Color.BLACK, PieceType.ROOK)
-                    self.squares[str_to_square("d8")] = None
+                    self._clear_square(str_to_square("d8"))
+                    self._place_piece(str_to_square("a8"), (Color.BLACK, PieceType.ROOK))
 
-        self.squares[move.from_sq] = undo.moved_piece
-        if pt == PieceType.KING:
-            if color == Color.WHITE:
-                self.white_king_sq = move.from_sq
-            else:
-                self.black_king_sq = move.from_sq
+        self._place_piece(move.from_sq, undo.moved_piece)
 
         if undo.captured_piece is not None and undo.captured_sq is not None:
-            self.squares[undo.captured_sq] = undo.captured_piece
+            self._place_piece(undo.captured_sq, undo.captured_piece)
 
         self.hash = undo.hash
 
@@ -875,5 +935,5 @@ class Board:
         color, pt = piece
         self._toggle_piece(color, pt, src)
         self._toggle_piece(color, pt, dst)
-        self.squares[src] = None
-        self.squares[dst] = piece
+        self._clear_square(src)
+        self._place_piece(dst, piece)

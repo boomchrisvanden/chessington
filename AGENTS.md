@@ -8,7 +8,7 @@ The main head of the project is the engine which will be an alpha-beta pruning s
 Next, the opening theory practice will be split into two parts:
 a) A practice run which is difficulty based that picks a random line from the opening book (`Book.bin`) and evaluates if the user chooses the right moves. The user loses lives until the game is over.
 
-b) A fuzzy search for the user to learn a specific opening. This section has not been implemented yet.
+b) A fuzzy search for the user to learn a specific opening.
 
 ## Rules 
 For your changes to be successful:
