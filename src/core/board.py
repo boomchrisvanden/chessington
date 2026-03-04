@@ -969,6 +969,42 @@ class Board:
     def is_fifty_move_rule(self) -> bool:
         return self.halfmove_clock >= 100
 
+    def has_any_legal_move(self) -> bool:
+        for move in self.generate_pseudo_legal():
+            undo = self.make_move(move)
+            if undo is None:
+                continue
+            legal = not self.in_check(undo.side_to_move)
+            self.unmake_move(undo)
+            if legal:
+                return True
+        return False
+
+    def is_checkmate(self) -> bool:
+        return self.in_check(self.side_to_move) and not self.has_any_legal_move()
+
+    def is_stalemate(self) -> bool:
+        return not self.in_check(self.side_to_move) and not self.has_any_legal_move()
+
+    def is_draw(self) -> bool:
+        return (
+            self.is_stalemate()
+            or self.is_fifty_move_rule()
+            or self.is_repetition()
+            or self.is_insufficient_material()
+        )
+
+    def draw_reason(self) -> str:
+        if self.is_stalemate():
+            return "stalemate"
+        if self.is_repetition():
+            return "threefold repetition"
+        if self.is_fifty_move_rule():
+            return "50-move rule"
+        if self.is_insufficient_material():
+            return "insufficient material"
+        return ""
+
     def is_insufficient_material(self) -> bool:
         """Check for K vs K, K+minor vs K, K+B vs K+B same color."""
         w, b = 0, 1

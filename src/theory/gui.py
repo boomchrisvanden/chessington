@@ -19,6 +19,7 @@ from theory.practice import (
     find_opening_name_matches,
 )
 from book.polyglot_zobrist import algebraic_to_square, square_to_algebraic
+from src.utils.assets import load_piece_images, build_fallback_piece_surfaces
 
 
 # Piece type mapping for display
@@ -110,8 +111,10 @@ class TheoryPracticeGUI:
         self.return_to_menu = False
         
         # Load piece images
-        self.pieces = self.load_piece_images(piece_dir)
-        self.fallback_pieces = self.build_fallback_piece_surfaces()
+        self.pieces = load_piece_images(piece_dir, self.square_size)
+        self.fallback_pieces = build_fallback_piece_surfaces(
+            self.square_size, self.piece_font
+        )
         
         # Start the first line
         self.game.start_new_line()
@@ -119,68 +122,6 @@ class TheoryPracticeGUI:
             self._open_search()
         else:
             self._check_opponent_turn()
-    
-    def load_piece_images(self, piece_dir: str):
-        """Load piece images from directory."""
-        pieces = {}
-        piece_dir_path = Path(piece_dir)
-        
-        if not piece_dir_path.exists():
-            return pieces
-        
-        # Build a mapping of lowercase filenames to paths
-        png_by_name = {}
-        for p in piece_dir_path.iterdir():
-            if p.is_file() and p.suffix.lower() == ".png":
-                png_by_name[p.name.lower()] = p
-        
-        # Color codes: 0 = white, 1 = black
-        for color, ccode in ((0, 'w'), (1, 'b')):
-            for pt, pcode in (
-                (1, 'P'),  # Pawn
-                (2, 'N'),  # Knight
-                (3, 'B'),  # Bishop
-                (4, 'R'),  # Rook
-                (5, 'Q'),  # Queen
-                (6, 'K'),  # King
-            ):
-                candidate_names = [
-                    f"{ccode}{pcode}.png",
-                    f"{ccode}{pcode.lower()}.png",
-                ]
-                
-                png_path = None
-                for name in candidate_names:
-                    if name.lower() in png_by_name:
-                        png_path = png_by_name[name.lower()]
-                        break
-                
-                if png_path is None or not png_path.exists():
-                    continue
-                
-                img = pygame.image.load(str(png_path)).convert_alpha()
-                img = pygame.transform.smoothscale(img, (self.square_size, self.square_size))
-                pieces[(color, pt)] = img
-        
-        return pieces
-    
-    def build_fallback_piece_surfaces(self):
-        """Build fallback text-based piece surfaces."""
-        fallback = {}
-        for color in (0, 1):
-            for pt, letter in PIECE_TYPE_TO_LETTER.items():
-                fg = (245, 245, 245) if color == 0 else (20, 20, 20)
-                outline = (20, 20, 20) if color == 0 else (245, 245, 245)
-                base = self.piece_font.render(letter, True, fg)
-                shadow = self.piece_font.render(letter, True, outline)
-                
-                surf = pygame.Surface((self.square_size, self.square_size), pygame.SRCALPHA)
-                rect = base.get_rect(center=(self.square_size // 2, self.square_size // 2))
-                for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
-                    surf.blit(shadow, rect.move(dx, dy))
-                surf.blit(base, rect)
-                fallback[(color, pt)] = surf
-        return fallback
     
     def square_from_pos(self, pos: Tuple[int, int]) -> Optional[int]:
         """Convert screen position to board square index."""
