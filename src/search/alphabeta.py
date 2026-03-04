@@ -76,6 +76,13 @@ def _pvs(
     """
     nodes[0] += 1
 
+    # Draw detection (skip at root ply).
+    if ply > 0:
+        if board.halfmove_clock >= 100:
+            return 0
+        if board.is_repetition(2):
+            return 0
+
     # Quiescence at horizon.
     if depth <= 0:
         return quiescence(board, alpha, beta, ply, tt=tt)

@@ -63,6 +63,8 @@ class Board:
         self.squares: List[Optional[Tuple[Color, PieceType]]] = [None] * 64
         self.side_to_move = Color.WHITE
         self.ep_square: Optional[int] = None  # en-passant capture destination square
+        self.halfmove_clock: int = 0
+        self.position_history: List[tuple] = []
         self._setup_startpos()
 
     @staticmethod
@@ -72,6 +74,7 @@ class Board:
     def _setup_startpos(self):
         self.squares = [None] * 64
         self.ep_square = None
+        self.halfmove_clock = 0
 
         # White pieces
         self.squares[str_to_square("a1")] = (Color.WHITE, PieceType.ROOK)
@@ -98,6 +101,10 @@ class Board:
             self.squares[str_to_square(f"{file_char}7")] = (Color.BLACK, PieceType.PAWN)
 
         self.side_to_move = Color.WHITE
+        self.position_history = [self._position_key()]
+
+    def _position_key(self) -> tuple:
+        return (tuple(self.squares), self.side_to_move, self.ep_square)
 
     def generate_legal(self) -> List[Move]:
         return []
@@ -438,10 +445,76 @@ class Board:
     def is_checkmate(self) -> bool:
         return self.in_check(self.side_to_move) and not self.has_any_legal_move()
 
+    def is_stalemate(self) -> bool:
+        return not self.in_check(self.side_to_move) and not self.has_any_legal_move()
+
+    def is_fifty_move_rule(self) -> bool:
+        return self.halfmove_clock >= 100
+
+    def is_threefold_repetition(self) -> bool:
+        current = self.position_history[-1] if self.position_history else None
+        if current is None:
+            return False
+        return self.position_history.count(current) >= 3
+
+    def is_insufficient_material(self) -> bool:
+        pieces: List[Tuple[Color, PieceType]] = []
+        for sq in range(64):
+            p = self.squares[sq]
+            if p is not None:
+                pieces.append(p)
+
+        # Filter out kings
+        non_kings = [(c, pt) for c, pt in pieces if pt != PieceType.KING]
+
+        # K vs K
+        if len(non_kings) == 0:
+            return True
+        # K+minor vs K
+        if len(non_kings) == 1:
+            _, pt = non_kings[0]
+            if pt in (PieceType.KNIGHT, PieceType.BISHOP):
+                return True
+        # K+B vs K+B same color
+        if len(non_kings) == 2:
+            (c1, pt1), (c2, pt2) = non_kings
+            if pt1 == PieceType.BISHOP and pt2 == PieceType.BISHOP and c1 != c2:
+                # Find bishop squares
+                b_squares = [sq for sq in range(64) if self.squares[sq] is not None
+                             and self.squares[sq][1] == PieceType.BISHOP]
+                if len(b_squares) == 2:
+                    # Same color square check: (rank + file) % 2
+                    color1 = (b_squares[0] // 8 + b_squares[0] % 8) % 2
+                    color2 = (b_squares[1] // 8 + b_squares[1] % 8) % 2
+                    if color1 == color2:
+                        return True
+        return False
+
+    def is_draw(self) -> bool:
+        return (
+            self.is_stalemate()
+            or self.is_fifty_move_rule()
+            or self.is_threefold_repetition()
+            or self.is_insufficient_material()
+        )
+
+    def draw_reason(self) -> str:
+        if self.is_stalemate():
+            return "stalemate"
+        if self.is_threefold_repetition():
+            return "threefold repetition"
+        if self.is_fifty_move_rule():
+            return "50-move rule"
+        if self.is_insufficient_material():
+            return "insufficient material"
+        return ""
+
     def _would_leave_king_in_check(self, color: Color, move: Move) -> bool:
         squares_before = self.squares[:]
         ep_before = self.ep_square
         stm_before = self.side_to_move
+        hmc_before = self.halfmove_clock
+        hist_len = len(self.position_history)
 
         self.make_move(move)
         still_in_check = self.in_check(color)
@@ -449,6 +522,8 @@ class Board:
         self.squares[:] = squares_before
         self.ep_square = ep_before
         self.side_to_move = stm_before
+        self.halfmove_clock = hmc_before
+        del self.position_history[hist_len:]
 
         return still_in_check
 
@@ -534,6 +609,9 @@ class Board:
         to_rank, to_file = divmod(move.to_sq, 8)
         rank_step = 1 if color == Color.WHITE else -1
 
+        # Detect capture before moving pieces
+        is_capture = self.squares[move.to_sq] is not None
+
         # Handle castling (UI-only; no legality checks)
         if pt == PieceType.KING:
             if color == Color.WHITE and move.from_sq == str_to_square("e1"):
@@ -556,6 +634,7 @@ class Board:
                 and move.to_sq == self.ep_square
             ):
                 is_en_passant = True
+                is_capture = True
 
         if is_en_passant:
             captured_sq = move.to_sq - (8 * rank_step)
@@ -575,7 +654,14 @@ class Board:
         if pt == PieceType.PAWN and from_file == to_file and (to_rank - from_rank) == 2 * rank_step:
             self.ep_square = move.from_sq + (8 * rank_step)
 
+        # Update halfmove clock
+        if pt == PieceType.PAWN or is_capture:
+            self.halfmove_clock = 0
+        else:
+            self.halfmove_clock += 1
+
         self.side_to_move = Color.BLACK if self.side_to_move == Color.WHITE else Color.WHITE
+        self.position_history.append(self._position_key())
 
     def _move_piece(self, src: int, dst: int) -> None:
         piece = self.squares[src]
@@ -1151,6 +1237,11 @@ class ChessGUI:
         if self.board.is_checkmate():
             winner = "White" if self.board.side_to_move == Color.BLACK else "Black"
             self.status_message = f"Checkmate! {winner} wins. Type 'reset' to restart."
+            self.game_over = True
+            return
+        if self.board.is_draw():
+            reason = self.board.draw_reason()
+            self.status_message = f"Draw by {reason}! Type 'reset' to restart."
             self.game_over = True
             return
         if self.board.in_check(self.board.side_to_move):

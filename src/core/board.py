@@ -40,6 +40,7 @@ class Board:
         self.fullmove_number: int = 1
         self.hash: int = 0
         self._recompute_hash()
+        self.hash_history: list[int] = []
 
     @property
     def squares(self) -> List[Optional[Piece]]:
@@ -165,6 +166,7 @@ class Board:
             )
 
         self._recompute_hash()
+        self.hash_history = [self.hash]
 
     def _toggle_piece(self, color: Color, pt: PieceType, sq: int) -> None:
         self.hash ^= ZOBRIST.piece_square[piece_index(color, pt)][sq]
@@ -249,6 +251,7 @@ class Board:
         b.halfmove_clock = int(halfmove)
         b.fullmove_number = int(fullmove)
         b._recompute_hash()
+        b.hash_history = [b.hash]
         return b
 
     def validate_move(self, move: Move) -> Tuple[bool, str]:
@@ -889,6 +892,8 @@ class Board:
             self.hash ^= ZOBRIST.ep_file[self.ep_square % 8]
         self.hash ^= ZOBRIST.side
 
+        self.hash_history.append(self.hash)
+
         undo.captured_piece = captured_piece
         undo.captured_sq = captured_sq
         return undo
@@ -927,6 +932,7 @@ class Board:
             self._place_piece(undo.captured_sq, undo.captured_piece)
 
         self.hash = undo.hash
+        self.hash_history.pop()
 
     def _move_piece(self, src: int, dst: int) -> None:
         piece = self.squares[src]
@@ -937,3 +943,65 @@ class Board:
         self._toggle_piece(color, pt, dst)
         self._clear_square(src)
         self._place_piece(dst, piece)
+
+    def is_repetition(self, count: int = 3) -> bool:
+        """Check if the current position has occurred `count` times in hash_history.
+
+        The Zobrist hash includes side-to-move, so equal hashes imply same position.
+        Only scan back within the halfmove_clock window (no irreversible move).
+        """
+        current = self.hash
+        needed = count - 1  # current position is the latest entry
+        if needed <= 0:
+            return True
+        seen = 0
+        history = self.hash_history
+        n = len(history)
+        # Scan backward from n-2 (skip current), limited by halfmove_clock
+        earliest = max(0, n - 1 - self.halfmove_clock)
+        for i in range(n - 2, earliest - 1, -1):
+            if history[i] == current:
+                seen += 1
+                if seen >= needed:
+                    return True
+        return False
+
+    def is_fifty_move_rule(self) -> bool:
+        return self.halfmove_clock >= 100
+
+    def is_insufficient_material(self) -> bool:
+        """Check for K vs K, K+minor vs K, K+B vs K+B same color."""
+        w, b = 0, 1
+        # Any pawns, rooks, or queens → sufficient
+        for c in (w, b):
+            if (
+                self.piece_bb[c][int(PieceType.PAWN)]
+                | self.piece_bb[c][int(PieceType.ROOK)]
+                | self.piece_bb[c][int(PieceType.QUEEN)]
+            ):
+                return False
+
+        w_knights = bin(self.piece_bb[w][int(PieceType.KNIGHT)]).count("1")
+        w_bishops = bin(self.piece_bb[w][int(PieceType.BISHOP)]).count("1")
+        b_knights = bin(self.piece_bb[b][int(PieceType.KNIGHT)]).count("1")
+        b_bishops = bin(self.piece_bb[b][int(PieceType.BISHOP)]).count("1")
+
+        w_minors = w_knights + w_bishops
+        b_minors = b_knights + b_bishops
+
+        # K vs K
+        if w_minors == 0 and b_minors == 0:
+            return True
+        # K+minor vs K
+        if w_minors <= 1 and b_minors == 0:
+            return True
+        if b_minors <= 1 and w_minors == 0:
+            return True
+        # K+B vs K+B same color bishops
+        if w_minors == 1 and b_minors == 1 and w_knights == 0 and b_knights == 0:
+            # Both have exactly one bishop — check same square color
+            w_bsq = (self.piece_bb[w][int(PieceType.BISHOP)] & 0x55AA55AA55AA55AA) != 0
+            b_bsq = (self.piece_bb[b][int(PieceType.BISHOP)] & 0x55AA55AA55AA55AA) != 0
+            if w_bsq == b_bsq:
+                return True
+        return False
