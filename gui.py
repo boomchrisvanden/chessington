@@ -8,15 +8,6 @@ import queue
 from pathlib import Path
 import re
 
-# --------------------------------------------------------------------
-# Import your engine core here
-# --------------------------------------------------------------------
-# Adjust paths/imports to match your project structure
-# from chess_engine.core.board import Board
-# from chess_engine.core.types import Color, PieceType, Move
-
-# For now I’ll define tiny stand-ins; replace with your real ones.
-
 from enum import IntEnum, auto, Enum
 from dataclasses import dataclass
 from typing import Optional, Tuple, List, Callable
@@ -727,7 +718,7 @@ class ChessGUI:
         self.drag_pos = (0, 0)
 
         self.play_vs_engine = False
-        self.engine_depth = 8
+        self.engine_depth = 6
         self.engine_side = Color.WHITE
         self.move_history: List[str] = []
         self.engine_proc: Optional[subprocess.Popen] = None
