@@ -253,10 +253,17 @@ def uci_loop(stdin: TextIO = sys.stdin, stdout: TextIO = sys.stdout) -> None:
                         send(f"bestmove {book_move.uci()}")
                         continue
             limits = _parse_go(args)
-            max_depth = limits.depth or 1
             time_ms = _compute_time_ms(board, limits)
+            max_depth = limits.depth or 64
 
-            result = iterative_deepening(board, max_depth=max_depth, time_ms=time_ms, tt=tt)
+            def _info_cb(depth: int, score_cp: int, nodes: int, elapsed_ms: int) -> None:
+                nps = (nodes * 1000 // max(1, elapsed_ms))
+                send(f"info depth {depth} score cp {score_cp} nodes {nodes} time {elapsed_ms} nps {nps}")
+
+            result = iterative_deepening(
+                board, max_depth=max_depth, time_ms=time_ms, tt=tt,
+                info_callback=_info_cb,
+            )
             if result.best_move is None:
                 send("bestmove 0000")
             else:

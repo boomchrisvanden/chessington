@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import time
 from typing import Optional, Tuple
 
 from src.core.board import Board
@@ -13,6 +14,14 @@ from src.search.tt import Bound, TTEntry, TranspositionTable
 
 INF = 100_000
 MATE_SCORE = 10_000
+
+# Node interval for time checks inside the search tree.
+_TIME_CHECK_INTERVAL = 2048
+
+
+class SearchAborted(Exception):
+    """Raised when the search must stop due to time running out."""
+    pass
 
 # Null-move pruning constants.
 _NMP_REDUCTION = 2
@@ -70,11 +79,17 @@ def _pvs(
     orderer: MoveOrderer,
     do_null: bool,
     nodes: list[int],
+    stop_time: float = 0.0,
 ) -> int:
     """
     Principal Variation Search with NMP, LMR, and full move ordering.
     """
     nodes[0] += 1
+
+    # Periodic time check.
+    if stop_time and nodes[0] % _TIME_CHECK_INTERVAL == 0:
+        if time.monotonic() >= stop_time:
+            raise SearchAborted
 
     # Draw detection (skip at root ply).
     if ply > 0:
@@ -138,7 +153,7 @@ def _pvs(
 
         null_score = -_pvs(
             board, depth - 1 - _NMP_REDUCTION, -beta, -beta + 1,
-            ply + 1, tt, orderer, False, nodes,
+            ply + 1, tt, orderer, False, nodes, stop_time,
         )
 
         # Unmake null move.
@@ -206,7 +221,7 @@ def _pvs(
             # First move (PV): full window.
             score = -_pvs(
                 board, depth - 1, -beta, -alpha,
-                ply + 1, tt, orderer, True, nodes,
+                ply + 1, tt, orderer, True, nodes, stop_time,
             )
         else:
             # --- Late Move Reductions ---
@@ -229,21 +244,21 @@ def _pvs(
             # PVS: zero-width window.
             score = -_pvs(
                 board, depth - 1 - reduction, -alpha - 1, -alpha,
-                ply + 1, tt, orderer, True, nodes,
+                ply + 1, tt, orderer, True, nodes, stop_time,
             )
 
             # Re-search at full depth if LMR failed high.
             if reduction > 0 and score > alpha:
                 score = -_pvs(
                     board, depth - 1, -alpha - 1, -alpha,
-                    ply + 1, tt, orderer, True, nodes,
+                    ply + 1, tt, orderer, True, nodes, stop_time,
                 )
 
             # Re-search with full window if PVS failed high.
             if score > alpha and score < beta:
                 score = -_pvs(
                     board, depth - 1, -beta, -alpha,
-                    ply + 1, tt, orderer, True, nodes,
+                    ply + 1, tt, orderer, True, nodes, stop_time,
                 )
 
         board.unmake_move(undo)
@@ -284,6 +299,7 @@ def search(
     orderer: Optional[MoveOrderer] = None,
     alpha: int = -INF,
     beta: int = INF,
+    stop_time: float = 0.0,
 ) -> Tuple[int, Optional[Move], int]:
     """
     Root search. Returns (score, best_move, nodes).
@@ -327,18 +343,18 @@ def search(
         if moves_searched == 0:
             score = -_pvs(
                 board, depth - 1, -beta, -alpha,
-                1, tt, orderer, True, nodes,
+                1, tt, orderer, True, nodes, stop_time,
             )
         else:
             # PVS zero-window.
             score = -_pvs(
                 board, depth - 1, -alpha - 1, -alpha,
-                1, tt, orderer, True, nodes,
+                1, tt, orderer, True, nodes, stop_time,
             )
             if score > alpha and score < beta:
                 score = -_pvs(
                     board, depth - 1, -beta, -alpha,
-                    1, tt, orderer, True, nodes,
+                    1, tt, orderer, True, nodes, stop_time,
                 )
 
         board.unmake_move(undo)
