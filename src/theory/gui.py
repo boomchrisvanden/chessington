@@ -4,6 +4,7 @@ Pygame GUI for opening theory practice.
 Provides a graphical interface for practicing chess opening theory.
 """
 
+import math
 import os
 import sys
 import pygame
@@ -31,6 +32,13 @@ PIECE_TYPE_TO_LETTER = {
     5: 'Q',  # Queen
     6: 'K',  # King
 }
+
+# Piece values for material counting (integer piece type keys)
+THEORY_PIECE_VALUES = {1: 1, 2: 3, 3: 3, 4: 5, 5: 9, 6: 0}
+
+# Arrow/highlight colors (RGBA)
+HIGHLIGHT_RGBA = (235, 97, 80, 140)
+ARROW_RGBA = (245, 171, 53, 200)
 
 
 class TheoryPracticeGUI:
@@ -87,6 +95,13 @@ class TheoryPracticeGUI:
         
         # Flip board if playing as black
         self.flip_board = (player_color == 1)
+
+        # Right-click annotations (arrows and square highlights)
+        self.arrows: List[Tuple[int, int]] = []
+        self.rc_highlights: set = set()
+        self.right_click_from: Optional[int] = None
+        self.right_dragging = False
+        self.right_drag_pos = (0, 0)
         
         # Colors
         self.light_color = (240, 217, 181)
@@ -328,8 +343,18 @@ class TheoryPracticeGUI:
     
     def handle_mouse_down(self, event) -> None:
         """Handle mouse button down event."""
+        if event.button == 3:
+            sq = self.square_from_pos(event.pos)
+            if sq is not None:
+                self.right_click_from = sq
+                self.right_dragging = True
+                self.right_drag_pos = event.pos
+            return
         if event.button != 1:
             return
+        # Clear annotations on left click
+        self.arrows.clear()
+        self.rc_highlights.clear()
 
         if self.search_active:
             self._handle_search_click(event.pos)
@@ -407,6 +432,8 @@ class TheoryPracticeGUI:
     
     def handle_mouse_motion(self, event) -> None:
         """Handle mouse motion event."""
+        if self.right_dragging:
+            self.right_drag_pos = event.pos
         if self.search_active:
             return
         if not self.dragging:
@@ -415,6 +442,24 @@ class TheoryPracticeGUI:
     
     def handle_mouse_up(self, event) -> None:
         """Handle mouse button up event."""
+        if event.button == 3:
+            if self.right_dragging and self.right_click_from is not None:
+                drop_sq = self.square_from_pos(event.pos)
+                if drop_sq is not None:
+                    if drop_sq == self.right_click_from:
+                        if drop_sq in self.rc_highlights:
+                            self.rc_highlights.discard(drop_sq)
+                        else:
+                            self.rc_highlights.add(drop_sq)
+                    else:
+                        arrow = (self.right_click_from, drop_sq)
+                        if arrow in self.arrows:
+                            self.arrows.remove(arrow)
+                        else:
+                            self.arrows.append(arrow)
+            self.right_click_from = None
+            self.right_dragging = False
+            return
         if self.search_active:
             return
         if event.button != 1 or not self.dragging:
@@ -500,6 +545,21 @@ class TheoryPracticeGUI:
         opening_rect = opening_surf.get_rect(center=(self.width // 2, self.header_height // 2))
         self.screen.blit(opening_surf, opening_rect)
         
+        # Material display (top left area)
+        w_mat, b_mat = self._get_material_balance()
+        diff = w_mat - b_mat
+        if diff > 0:
+            mat_text = f"[+{diff}]"
+            mat_color = (220, 220, 220)
+        elif diff < 0:
+            mat_text = f"[{diff}]"
+            mat_color = (180, 180, 180)
+        else:
+            mat_text = "[=]"
+            mat_color = (140, 140, 140)
+        mat_surf = self.small_font.render(mat_text, True, mat_color)
+        self.screen.blit(mat_surf, (10, 10))
+
         # Lives display (top right)
         lives_text = f"Lives: {self.game.get_lives_display()}"
         lives_surf = self.small_font.render(lives_text, True, (255, 200, 100))
@@ -560,7 +620,9 @@ class TheoryPracticeGUI:
             x = 5
             y = i * self.square_size + self.header_height + 5
             self.screen.blit(label, (x, y))
-        
+
+        self._draw_annotations()
+
         # Draw dragged piece
         if self.dragging and self.drag_piece is not None:
             img = self.pieces.get(self.drag_piece)
@@ -571,6 +633,75 @@ class TheoryPracticeGUI:
                 y = self.drag_pos[1] - self.square_size // 2
                 self.screen.blit(img, (x, y))
     
+    def _draw_annotations(self) -> None:
+        for sq in self.rc_highlights:
+            x, y = self.pos_from_square(sq)
+            surf = pygame.Surface((self.square_size, self.square_size), pygame.SRCALPHA)
+            surf.fill(HIGHLIGHT_RGBA)
+            self.screen.blit(surf, (x, y))
+        for from_sq, to_sq in self.arrows:
+            self._draw_arrow(from_sq, to_sq)
+        if self.right_dragging and self.right_click_from is not None:
+            temp_to = self.square_from_pos(self.right_drag_pos)
+            if temp_to is not None and temp_to != self.right_click_from:
+                self._draw_arrow(self.right_click_from, temp_to)
+
+    def _draw_arrow(self, from_sq: int, to_sq: int) -> None:
+        half = self.square_size // 2
+        fx, fy = self.pos_from_square(from_sq)
+        tx, ty = self.pos_from_square(to_sq)
+        start = (fx + half, fy + half)
+        end = (tx + half, ty + half)
+
+        dx = end[0] - start[0]
+        dy = end[1] - start[1]
+        length = math.sqrt(dx * dx + dy * dy)
+        if length == 0:
+            return
+
+        ux, uy = dx / length, dy / length
+        px, py = -uy, ux
+
+        shaft_w = max(10, self.square_size // 6)
+        head_len = self.square_size * 0.4
+        head_w = self.square_size * 0.5
+
+        se_x = end[0] - ux * head_len
+        se_y = end[1] - uy * head_len
+
+        shaft = [
+            (start[0] + px * shaft_w / 2, start[1] + py * shaft_w / 2),
+            (start[0] - px * shaft_w / 2, start[1] - py * shaft_w / 2),
+            (se_x - px * shaft_w / 2, se_y - py * shaft_w / 2),
+            (se_x + px * shaft_w / 2, se_y + py * shaft_w / 2),
+        ]
+        head = [
+            end,
+            (se_x + px * head_w / 2, se_y + py * head_w / 2),
+            (se_x - px * head_w / 2, se_y - py * head_w / 2),
+        ]
+
+        surf_h = self.header_height + self.board_size
+        arrow_surf = pygame.Surface((self.board_size, surf_h), pygame.SRCALPHA)
+        pygame.draw.polygon(arrow_surf, ARROW_RGBA, shaft)
+        pygame.draw.polygon(arrow_surf, ARROW_RGBA, head)
+        self.screen.blit(arrow_surf, (0, 0))
+
+    def _get_material_balance(self) -> Tuple[int, int]:
+        """Returns (white_material, black_material)."""
+        white = 0
+        black = 0
+        for sq in range(64):
+            piece = self.game.squares[sq]
+            if piece is not None:
+                color, pt = piece
+                val = THEORY_PIECE_VALUES.get(pt, 0)
+                if color == 0:
+                    white += val
+                else:
+                    black += val
+        return white, black
+
     def draw_info_panel(self) -> None:
         """Draw the info panel at the bottom."""
         panel_y = self.header_height + self.board_size

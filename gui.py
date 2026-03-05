@@ -1,3 +1,4 @@
+import math
 import os
 import sys
 import pygame
@@ -23,6 +24,21 @@ from src.utils.assets import (
     get_piece_dir,
     load_piece_images,
 )
+
+
+# Piece values for material counting
+PIECE_VALUES = {
+    PieceType.PAWN: 1,
+    PieceType.KNIGHT: 3,
+    PieceType.BISHOP: 3,
+    PieceType.ROOK: 5,
+    PieceType.QUEEN: 9,
+    PieceType.KING: 0,
+}
+
+# Arrow/highlight colors (RGBA)
+HIGHLIGHT_RGBA = (235, 97, 80, 140)
+ARROW_RGBA = (245, 171, 53, 200)
 
 
 # --------------------------------------------------------------------
@@ -67,6 +83,16 @@ class ChessGUI:
 
         # Flag to indicate returning to main menu
         self.return_to_menu = False
+
+        # Board orientation
+        self.flip_board = False
+
+        # Right-click annotations (arrows and square highlights)
+        self.arrows: List[Tuple[int, int]] = []
+        self.highlights: set = set()
+        self.right_click_from: Optional[int] = None
+        self.right_dragging = False
+        self.right_drag_pos = (0, 0)
 
         self.light_color = (240, 217, 181)
         self.dark_color = (181, 136, 99)
@@ -157,13 +183,40 @@ class ChessGUI:
         x, y = pos
         if x < 0 or y < 0 or x >= self.board_size or y >= self.board_size:
             return None
-        file = x // self.square_size
-        rank = y // self.square_size
-        return (7 - rank) * 8 + file
+        visual_file = x // self.square_size
+        visual_rank = y // self.square_size
+        if self.flip_board:
+            actual_file = 7 - visual_file
+            actual_rank = visual_rank
+        else:
+            actual_file = visual_file
+            actual_rank = 7 - visual_rank
+        return actual_rank * 8 + actual_file
+
+    def pos_from_square(self, square: int) -> Tuple[int, int]:
+        actual_file = square % 8
+        actual_rank = square // 8
+        if self.flip_board:
+            visual_file = 7 - actual_file
+            visual_rank = actual_rank
+        else:
+            visual_file = actual_file
+            visual_rank = 7 - actual_rank
+        return visual_file * self.square_size, visual_rank * self.square_size
 
     def handle_mouse_down(self, event):
+        if event.button == 3:
+            sq = self.square_from_pos(event.pos)
+            if sq is not None:
+                self.right_click_from = sq
+                self.right_dragging = True
+                self.right_drag_pos = event.pos
+            return
         if event.button != 1:
             return
+        # Clear annotations on left click
+        self.arrows.clear()
+        self.highlights.clear()
         # Menu button - return to main menu
         if self.menu_button_rect.collidepoint(event.pos):
             self.return_to_menu = True
@@ -186,11 +239,31 @@ class ChessGUI:
         self.drag_pos = event.pos
 
     def handle_mouse_motion(self, event):
+        if self.right_dragging:
+            self.right_drag_pos = event.pos
         if not self.dragging:
             return
         self.drag_pos = event.pos
 
     def handle_mouse_up(self, event):
+        if event.button == 3:
+            if self.right_dragging and self.right_click_from is not None:
+                drop_sq = self.square_from_pos(event.pos)
+                if drop_sq is not None:
+                    if drop_sq == self.right_click_from:
+                        if drop_sq in self.highlights:
+                            self.highlights.discard(drop_sq)
+                        else:
+                            self.highlights.add(drop_sq)
+                    else:
+                        arrow = (self.right_click_from, drop_sq)
+                        if arrow in self.arrows:
+                            self.arrows.remove(arrow)
+                        else:
+                            self.arrows.append(arrow)
+            self.right_click_from = None
+            self.right_dragging = False
+            return
         if event.button != 1 or not self.dragging:
             return
         from_sq = self.drag_from
@@ -308,17 +381,24 @@ class ChessGUI:
         self.draw_info_panel()
 
     def draw_board(self):
-        for rank in range(8):
-            for file in range(8):
-                square_index = (7 - rank) * 8 + file
-                is_light = (rank + file) % 2 == 0
+        for visual_rank in range(8):
+            for visual_file in range(8):
+                if self.flip_board:
+                    actual_file = 7 - visual_file
+                    actual_rank = visual_rank
+                else:
+                    actual_file = visual_file
+                    actual_rank = 7 - visual_rank
+
+                square_index = actual_rank * 8 + actual_file
+                is_light = (visual_rank + visual_file) % 2 == 0
                 color = self.light_color if is_light else self.dark_color
 
                 if self.last_move is not None and square_index in (self.last_move.from_sq, self.last_move.to_sq):
                     color = self.highlight_color
 
-                x = file * self.square_size
-                y = rank * self.square_size
+                x = visual_file * self.square_size
+                y = visual_rank * self.square_size
                 pygame.draw.rect(self.screen, color, (x, y, self.square_size, self.square_size))
 
                 piece = self.board.squares[square_index]
@@ -331,17 +411,25 @@ class ChessGUI:
                     if img is not None:
                         self.screen.blit(img, (x, y))
 
-        for file in range(8):
-            label = self.small_font.render(chr(ord('a') + file), True, (0, 0, 0))
-            x = file * self.square_size + 5
+        for i in range(8):
+            if self.flip_board:
+                file_label = chr(ord('h') - i)
+                rank_label = str(i + 1)
+            else:
+                file_label = chr(ord('a') + i)
+                rank_label = str(8 - i)
+
+            label = self.small_font.render(file_label, True, (0, 0, 0))
+            x = i * self.square_size + 5
             y = self.board_size - 20
             self.screen.blit(label, (x, y))
 
-        for rank in range(8):
-            label = self.small_font.render(str(rank + 1), True, (0, 0, 0))
+            label = self.small_font.render(rank_label, True, (0, 0, 0))
             x = 5
-            y = (7 - rank) * self.square_size + 5
+            y = i * self.square_size + 5
             self.screen.blit(label, (x, y))
+
+        self._draw_annotations()
 
         if self.dragging and self.drag_piece is not None:
             img = self.pieces.get(self.drag_piece)
@@ -351,6 +439,74 @@ class ChessGUI:
                 x = self.drag_pos[0] - self.square_size // 2
                 y = self.drag_pos[1] - self.square_size // 2
                 self.screen.blit(img, (x, y))
+
+    def _draw_annotations(self):
+        for sq in self.highlights:
+            x, y = self.pos_from_square(sq)
+            surf = pygame.Surface((self.square_size, self.square_size), pygame.SRCALPHA)
+            surf.fill(HIGHLIGHT_RGBA)
+            self.screen.blit(surf, (x, y))
+        for from_sq, to_sq in self.arrows:
+            self._draw_arrow(from_sq, to_sq)
+        if self.right_dragging and self.right_click_from is not None:
+            temp_to = self.square_from_pos(self.right_drag_pos)
+            if temp_to is not None and temp_to != self.right_click_from:
+                self._draw_arrow(self.right_click_from, temp_to)
+
+    def _draw_arrow(self, from_sq: int, to_sq: int, y_offset: int = 0):
+        half = self.square_size // 2
+        fx, fy = self.pos_from_square(from_sq)
+        tx, ty = self.pos_from_square(to_sq)
+        start = (fx + half, fy + half + y_offset)
+        end = (tx + half, ty + half + y_offset)
+
+        dx = end[0] - start[0]
+        dy = end[1] - start[1]
+        length = math.sqrt(dx * dx + dy * dy)
+        if length == 0:
+            return
+
+        ux, uy = dx / length, dy / length
+        px, py = -uy, ux
+
+        shaft_w = max(10, self.square_size // 6)
+        head_len = self.square_size * 0.4
+        head_w = self.square_size * 0.5
+
+        se_x = end[0] - ux * head_len
+        se_y = end[1] - uy * head_len
+
+        shaft = [
+            (start[0] + px * shaft_w / 2, start[1] + py * shaft_w / 2),
+            (start[0] - px * shaft_w / 2, start[1] - py * shaft_w / 2),
+            (se_x - px * shaft_w / 2, se_y - py * shaft_w / 2),
+            (se_x + px * shaft_w / 2, se_y + py * shaft_w / 2),
+        ]
+        head = [
+            end,
+            (se_x + px * head_w / 2, se_y + py * head_w / 2),
+            (se_x - px * head_w / 2, se_y - py * head_w / 2),
+        ]
+
+        arrow_surf = pygame.Surface((self.board_size, self.board_size + y_offset), pygame.SRCALPHA)
+        pygame.draw.polygon(arrow_surf, ARROW_RGBA, shaft)
+        pygame.draw.polygon(arrow_surf, ARROW_RGBA, head)
+        self.screen.blit(arrow_surf, (0, 0))
+
+    def _get_material_balance(self) -> Tuple[int, int]:
+        """Returns (white_material, black_material)."""
+        white = 0
+        black = 0
+        for sq in range(64):
+            piece = self.board.squares[sq]
+            if piece is not None:
+                color, pt = piece
+                val = PIECE_VALUES.get(pt, 0)
+                if color == Color.WHITE:
+                    white += val
+                else:
+                    black += val
+        return white, black
 
     def draw_info_panel(self):
         panel_y = self.board_size
@@ -367,10 +523,25 @@ class ChessGUI:
         menu_label_rect = menu_label.get_rect(center=self.menu_button_rect.center)
         self.screen.blit(menu_label, menu_label_rect)
 
-        # Current side to move
+        # Current side to move + material
         stm_text = "White to move" if self.board.side_to_move == Color.WHITE else "Black to move"
+        w_mat, b_mat = self._get_material_balance()
+        diff = w_mat - b_mat
+        if diff > 0:
+            mat_text = f"  [+{diff}]"
+            mat_color = (220, 220, 220)
+        elif diff < 0:
+            mat_text = f"  [{diff}]"
+            mat_color = (180, 180, 180)
+        else:
+            mat_text = "  [=]"
+            mat_color = (140, 140, 140)
+
         stm_surf = self.font.render(stm_text, True, (220, 220, 220))
         self.screen.blit(stm_surf, (100, panel_y + 10))
+        mat_surf = self.small_font.render(mat_text, True, mat_color)
+        stm_end_x = 100 + stm_surf.get_width()
+        self.screen.blit(mat_surf, (stm_end_x, panel_y + 14))
 
         if self.engine_thinking:
             button_color = (80, 80, 80)
@@ -571,6 +742,7 @@ def run_engine_game(piece_dir: str, player_color: Color) -> bool:
     gui = ChessGUI(board, piece_dir)
     gui.play_vs_engine = True
     gui.engine_side = player_color.other()
+    gui.flip_board = (player_color == Color.BLACK)
     gui.engine.epoch += 1
     gui._reset_board_state()
 
