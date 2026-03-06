@@ -695,6 +695,23 @@ class ColorSelectionMenu(MenuScreen):
         self.add_option("Back", 310)
 
 
+class DepthSelectionMenu(MenuScreen):
+    """Menu for selecting engine search depth."""
+
+    def __init__(self):
+        super().__init__(width=640, height=520, title="Select Engine Depth")
+        for i, d in enumerate(range(1, 11)):
+            col = i % 2
+            row = i // 2
+            x = 100 + col * 230
+            y = 120 + row * 60
+            rect = pygame.Rect(x, y, 200, 45)
+            option = MenuOption(f"Depth {d}", rect)
+            self.options.append(option)
+        back_rect = pygame.Rect((self.width - 300) // 2, 440, 300, 50)
+        self.options.append(MenuOption("Back", back_rect))
+
+
 class DifficultyMenu(MenuScreen):
     """Menu for selecting difficulty level in theory practice."""
 
@@ -731,7 +748,7 @@ def run_local_game(piece_dir: str) -> bool:
     return gui.run()
 
 
-def run_engine_game(piece_dir: str, player_color: Color) -> bool:
+def run_engine_game(piece_dir: str, player_color: Color, depth: int = 6) -> bool:
     """
     Run a game against the engine.
 
@@ -741,6 +758,7 @@ def run_engine_game(piece_dir: str, player_color: Color) -> bool:
     board = Board.from_startpos()
     gui = ChessGUI(board, piece_dir)
     gui.play_vs_engine = True
+    gui.engine_depth = depth
     gui.engine_side = player_color.other()
     gui.flip_board = (player_color == Color.BLACK)
     gui.engine.epoch += 1
@@ -805,14 +823,22 @@ def main():
             color_menu = ColorSelectionMenu(title="Play Against Engine")
             color_choice = color_menu.run()
 
-            if color_choice == "Play as White":
-                return_to_menu = run_engine_game(piece_dir, Color.WHITE)
-                if not return_to_menu:
-                    break
-            elif color_choice == "Play as Black":
-                return_to_menu = run_engine_game(piece_dir, Color.BLACK)
-                if not return_to_menu:
-                    break
+            if color_choice in ("Back", "back", "quit", None):
+                continue
+
+            player_color = Color.WHITE if color_choice == "Play as White" else Color.BLACK
+
+            # Show depth selection
+            depth_menu = DepthSelectionMenu()
+            depth_choice = depth_menu.run()
+
+            if depth_choice in ("Back", "back", "quit", None):
+                continue
+
+            depth = int(depth_choice.split()[-1])
+            return_to_menu = run_engine_game(piece_dir, player_color, depth)
+            if not return_to_menu:
+                break
 
         elif choice == "Theory Practice":
             # Show color selection first
