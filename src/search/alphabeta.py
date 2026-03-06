@@ -48,16 +48,6 @@ for _d in range(1, _LMR_MAX_DEPTH):
         _LMR_TABLE[_d][_m] = max(0, int(0.75 + math.log(_d) * math.log(_m) / 2.25))
 
 
-def _is_capture(board: Board, move: Move) -> bool:
-    if board.squares[move.to_sq] is not None:
-        return True
-    if board.ep_square is not None and move.to_sq == board.ep_square:
-        piece = board.squares[move.from_sq]
-        if piece is not None and piece[1] == PieceType.PAWN:
-            return True
-    return False
-
-
 def _has_non_pawn_material(board: Board, color: Color) -> bool:
     """Check if a side has any non-pawn, non-king material (for NMP guard)."""
     c = int(color)
@@ -200,7 +190,7 @@ def _pvs(
             continue
 
         found_legal = True
-        capture = _is_capture(board, move)
+        capture = undo.captured_piece is not None
         is_promotion = move.promotion is not None
         gives_check = board.in_check(board.side_to_move)
 

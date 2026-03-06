@@ -429,6 +429,113 @@ class Board:
 
         return moves
 
+    def generate_captures(self) -> List[Move]:
+        """Generate pseudo-legal capture moves only (including en passant and promotion captures)."""
+        color = self.side_to_move
+        enemy_occ = self.occ_bb[int(color.other())]
+        promotion_rank = 7 if color == Color.WHITE else 0
+        rank_step = 1 if color == Color.WHITE else -1
+        promotion_pieces = (
+            PieceType.QUEEN,
+            PieceType.ROOK,
+            PieceType.BISHOP,
+            PieceType.KNIGHT,
+        )
+
+        moves: List[Move] = []
+
+        for from_sq, piece in enumerate(self._squares):
+            if piece is None:
+                continue
+            p_color, pt = piece
+            if p_color != color:
+                continue
+
+            from_rank, from_file = divmod(from_sq, 8)
+
+            if pt == PieceType.PAWN:
+                # Pawn promotion pushes (non-capture but tactically important).
+                one_step_rank = from_rank + rank_step
+                if one_step_rank == promotion_rank:
+                    one_step_sq = from_sq + 8 * rank_step
+                    if self._squares[one_step_sq] is None:
+                        for promo in promotion_pieces:
+                            moves.append(Move(from_sq, one_step_sq, promotion=promo))
+
+                # Pawn captures (including promotion captures and en passant).
+                for file_step in (-1, 1):
+                    to_file = from_file + file_step
+                    to_rank = from_rank + rank_step
+                    if not (0 <= to_file < 8 and 0 <= to_rank < 8):
+                        continue
+                    to_sq = to_rank * 8 + to_file
+                    target = self._squares[to_sq]
+                    if target is not None:
+                        if target[0] != color and target[1] != PieceType.KING:
+                            if to_rank == promotion_rank:
+                                for promo in promotion_pieces:
+                                    moves.append(Move(from_sq, to_sq, promotion=promo))
+                            else:
+                                moves.append(Move(from_sq, to_sq))
+                    elif self.ep_square == to_sq:
+                        moves.append(Move(from_sq, to_sq))
+                continue
+
+            if pt == PieceType.KNIGHT:
+                for dr, df in (
+                    (2, 1), (2, -1), (-2, 1), (-2, -1),
+                    (1, 2), (1, -2), (-1, 2), (-1, -2),
+                ):
+                    r = from_rank + dr
+                    f = from_file + df
+                    if 0 <= r < 8 and 0 <= f < 8:
+                        to_sq = r * 8 + f
+                        if (1 << to_sq) & enemy_occ:
+                            moves.append(Move(from_sq, to_sq))
+                continue
+
+            if pt == PieceType.BISHOP:
+                directions = ((1, 1), (1, -1), (-1, 1), (-1, -1))
+            elif pt == PieceType.ROOK:
+                directions = ((1, 0), (-1, 0), (0, 1), (0, -1))
+            elif pt == PieceType.QUEEN:
+                directions = (
+                    (1, 1), (1, -1), (-1, 1), (-1, -1),
+                    (1, 0), (-1, 0), (0, 1), (0, -1),
+                )
+            elif pt == PieceType.KING:
+                for dr in (-1, 0, 1):
+                    for df in (-1, 0, 1):
+                        if dr == 0 and df == 0:
+                            continue
+                        r = from_rank + dr
+                        f = from_file + df
+                        if 0 <= r < 8 and 0 <= f < 8:
+                            to_sq = r * 8 + f
+                            if (1 << to_sq) & enemy_occ:
+                                target = self._squares[to_sq]
+                                if target[1] != PieceType.KING:
+                                    moves.append(Move(from_sq, to_sq))
+                continue
+            else:
+                continue
+
+            for dr, df in directions:
+                r = from_rank + dr
+                f = from_file + df
+                while 0 <= r < 8 and 0 <= f < 8:
+                    to_sq = r * 8 + f
+                    target = self._squares[to_sq]
+                    if target is None:
+                        r += dr
+                        f += df
+                        continue
+                    if target[0] != color and target[1] != PieceType.KING:
+                        moves.append(Move(from_sq, to_sq))
+                    break
+
+        return moves
+
     def generate_legal(self) -> List[Move]:
         moves: List[Move] = []
         for move in self.generate_pseudo_legal():

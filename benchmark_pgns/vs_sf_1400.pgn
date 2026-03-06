@@ -1,0 +1,118 @@
+[Event "Elo Benchmark vs SF 1400"]
+[Site "?"]
+[Date "????.??.??"]
+[Round "?"]
+[White "Chessington"]
+[Black "Stockfish_1400"]
+[Result "0-1"]
+
+1. Nf3 e6 2. e4 a6 3. Bd3 c5 4. O-O h6 5. Nc3 d6 6. b3 Nc6 7. Bb2 Nf6 8. Rc1 g5 9. Re1 Bg7 10. e5 Nd7 11. Ne4 dxe5 12. Nd6+ Kf8 13. h4 Ke7 14. Nxc8+ Qxc8 15. hxg5 hxg5 16. Nxg5 Rh6 17. Qf3 f5 18. Qe2 Qh8 19. Nh3 Rg8 20. Qe3 Bf6 21. Kh2 Ke8 22. Qf3 Rg4 23. Bc4 Be7 24. Qd3 Rhg6 25. g3 b5 26. Qf3 Nd8 27. Bd3 Rh6 28. Qg2 Rgg6 29. Be2 Bd6 30. c4 Rxh3+ 31. Qxh3 Rh6 32. Bh5+ Kf8 33. Kg1 b4 34. g4 fxg4 35. Qd3 Nf7 36. Bxg4 Ke7 37. Bf3 a5 38. Bg2 Ng5 39. f4 Rh7 40. fxg5 Rf7 41. Bc6 Qh4 42. Bxd7 Rf5 43. Qxf5 exf5 44. Bxe5 Qg4+ 45. Kf2 Kxd7 46. Bxd6 Kxd6 47. Re3 Qxg5 48. Rcc3 Qh4+ 49. Kg1 bxc3 50. dxc3 f4 51. Rd3+ Ke7 52. Kg2 Ke6 53. Rf3 Kf6 54. Rd3 Qe1 55. Rd6+ Ke5 56. Rd5+ Ke4 57. a3 Qg3+ 58. Kf1 f3 59. Rd2 Ke3 60. Rd7 Qf2# 0-1
+
+[Event "Elo Benchmark vs SF 1400"]
+[Site "?"]
+[Date "????.??.??"]
+[Round "?"]
+[White "Stockfish_1400"]
+[Black "Chessington"]
+[Result "0-1"]
+[FEN "r1bqkbnr/pppp1ppp/2n5/4p3/2B1P3/5N2/PPPP1PPP/RNBQK2R b KQkq - 3 3"]
+[SetUp "1"]
+
+3... Nf6 4. Nc3 Bc5 5. a3 Rf8 6. Na4 Bb6 7. d3 d5 8. Nxb6 axb6 9. Bxd5 Nxd5 10. exd5 Qxd5 11. O-O Bg4 12. Kh1 O-O-O 13. a4 e4 14. c4 Qh5 15. Be3 Rh8 16. a5 bxa5 17. b4 Nxb4 18. d4 Rhe8 19. Nd2 Bxd1 20. Rfxd1 Nc2 21. c5 Nxa1 22. Rxa1 b6 23. Rb1 bxc5 24. d5 Rxd5 25. h3 Rdd8 26. Rc1 Qe2 27. Nb1 Rd1+ 28. Kh2 Rxc1 29. Kg3 Rxb1 30. Bxc5 Rb3+ 31. Kh4 g5+ 32. Kxg5 Re5+ 33. Kf4 Qh5 34. g4 Rf3# 0-1
+
+[Event "Elo Benchmark vs SF 1400"]
+[Site "?"]
+[Date "????.??.??"]
+[Round "?"]
+[White "Chessington"]
+[Black "Stockfish_1400"]
+[Result "1-0"]
+[FEN "rnbqkb1r/1p2pppp/p2p1n2/8/3NP3/2N5/PPP2PPP/R1BQKB1R w KQkq - 0 6"]
+[SetUp "1"]
+
+6. Nf3 h6 7. Bc4 b5 8. Bd5 Nxd5 9. Qxd5 Ra7 10. O-O Nd7 11. Be3 Rb7 12. Qd3 e6 13. Qd1 g6 14. Bd4 e5 15. Be3 Nf6 16. Qd3 Bg7 17. Rad1 Ng4 18. Rfe1 Be6 19. Qxd6 Qb8 20. Qxa6 O-O 21. Bc5 b4 22. Bxf8 bxc3 23. Bxg7 cxb2 24. Rd8+ Qxd8 25. Qxb7 b1=B 26. Qc6 Bd7 27. Qd6 Qc8 28. Bxe5 Nxf2 29. Qd2 Nh3+ 30. gxh3 Bg4 31. Nh4 Bxa2 32. hxg4 h5 33. gxh5 Qc5+ 34. Qd4 Qf8 35. Qc3 Qe8 36. h6 Qd8 37. Nxg6 Qd7 38. h7+ Kxh7 39. Nf8+ Kh6 40. Bg7+ Kh5 41. Nxd7 Be6 42. Nf6+ Kh4 43. Qg3# 1-0
+
+[Event "Elo Benchmark vs SF 1400"]
+[Site "?"]
+[Date "????.??.??"]
+[Round "?"]
+[White "Stockfish_1400"]
+[Black "Chessington"]
+[Result "0-1"]
+[FEN "rnbqkb1r/ppp2ppp/4pn2/3p4/2PP4/2N5/PP2PPPP/R1BQKBNR w KQkq - 2 4"]
+[SetUp "1"]
+
+4. cxd5 exd5 5. g3 Bf5 6. a3 c5 7. Nf3 Nc6 8. dxc5 Bxc5 9. Bg5 d4 10. Bxf6 gxf6 11. Nb1 Rf8 12. Nbd2 Ne5 13. Bg2 Qe7 14. b4 Bb6 15. Rc1 Nd3+ 16. Kf1 Nxc1 17. Nh4 Be6 18. Qxc1 Rc8 19. Qb1 Qc7 20. Qd1 Qc2 21. Qxc2 Rxc2 22. f4 d3 23. exd3 Rxd2 24. Ke1 Be3 25. f5 Bd7 26. Be4 Bb5 27. Bxb7 Rxd3 28. a4 Bxa4 29. Be4 Bd2+ 30. Kf2 Rd4 31. Ra1 Rxe4 32. b5 Bxb5 33. Rxa7 Re2+ 34. Kf3 Rxh2 35. Ke4 Bc6+ 36. Kd4 Rg8 37. Kc5 Be3+ 38. Kxc6 Bxa7 39. Kd5 Kd7 40. Nf3 Rg4 41. Ne5+ fxe5 42. Kxe5 Bd4+ 43. Kd5 Rc2 44. f6 Rc5# 0-1
+
+[Event "Elo Benchmark vs SF 1400"]
+[Site "?"]
+[Date "????.??.??"]
+[Round "?"]
+[White "Chessington"]
+[Black "Stockfish_1400"]
+[Result "1-0"]
+[FEN "r1bqkbnr/1ppp1ppp/p1n5/4p3/B3P3/5N2/PPPP1PPP/RNBQK2R w KQkq - 0 4"]
+[SetUp "1"]
+
+4. Bxc6 dxc6 5. Nxe5 Bd6 6. d4 Qe7 7. Bf4 Nf6 8. Nc3 Bb4 9. Qf3 Bxc3+ 10. bxc3 O-O 11. h3 Qe6 12. Rf1 Qe7 13. Be3 Re8 14. Rb1 b5 15. Rd1 Qa3 16. Bg5 Be6 17. Bxf6 Bd5 18. Qg3 Qf8 19. exd5 cxd5 20. Kd2 Kh8 21. Bxg7+ Qxg7 22. Qxg7+ Kxg7 23. Rde1 f5 24. Ke3 Kf6 25. h4 Rg8 26. Kf3 a5 27. Nd7+ Kg6 28. h5+ Kg7 29. Re5 Kh8 30. Nf6 Rg7 31. h6 Rg6 32. Nxd5 Rxh6 33. Rfe1 c6 34. Ne7 Rf8 35. Rc5 Re8 36. c4 Rxe7 37. Rxe7 Kg8 38. cxb5 Rh4 39. Ra7 Rxd4 40. b6 Rg4 41. Ra8+ Kg7 42. b7 Rb4 43. b8=Q Rb3+ 44. cxb3 Kf6 45. Qh8+ Ke6 46. Ra7 h5 47. Qe5# 1-0
+
+[Event "Elo Benchmark vs SF 1400"]
+[Site "?"]
+[Date "????.??.??"]
+[Round "?"]
+[White "Stockfish_1400"]
+[Black "Chessington"]
+[Result "1/2-1/2"]
+[FEN "rnbqkbnr/pppp1ppp/4p3/8/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2"]
+[SetUp "1"]
+
+2. d3 Bb4+ 3. Nd2 Bxd2+ 4. Kxd2 Nf6 5. Qf3 Rf8 6. Qg3 g6 7. Kd1 d5 8. exd5 Nh5 9. Qg5 Qxd5 10. Qxd5 exd5 11. Bh6 Rh8 12. Ne2 Nc6 13. Kd2 d4 14. g3 Nxg3 15. Nxg3 Be6 16. h4 Ne5 17. Bg2 O-O-O 18. Rae1 Ng4 19. Bf4 Nxf2 20. Rhf1 Ng4 21. Ne4 Rhe8 22. a3 Kb8 23. Bh3 Ne3 24. Rf3 Bxh3 25. Rxh3 Nd5 26. Bg5 Rc8 27. c4 dxc3+ 28. bxc3 f5 29. c4 b5 30. cxd5 fxe4 31. dxe4 Rf8 32. e5 Rf2+ 33. Kc1 Ra2 34. Ree3 Re8 35. e6 Rf2 36. Kb1 Rf1+ 37. Ka2 Rf5 38. Re2 Rxd5 39. Rc3 a5 40. Rce3 a4 41. e7 Kb7 42. Ka1 Rd1+ 43. Kb2 Rf1 44. Rd3 Rf5 45. Rd8 Rxe7 46. Bxe7 Rf7 47. Rf8 Rxf8 48. Bxf8 Kc6 49. Kc3 Kd5 50. Kd2 c5 51. Bh6 b4 52. Bg5 bxa3 53. Re1 h6 54. Bxh6 Kc4 55. Kc2 a2 56. Kb2 a1=Q+ 57. Kxa1 a3 58. Re4+ Kb3 59. Re3+ Ka4 60. Ka2 Ka5 61. Re6 Ka4 62. Ra6+ Kb5 63. Rxg6 Kb4 64. h5 Ka4 65. Bc1 c4 66. h6 Kb4 67. Rd6 Ka4 68. Rg6 Kb4 69. Rg5 Ka4 1/2-1/2
+
+[Event "Elo Benchmark vs SF 1400"]
+[Site "?"]
+[Date "????.??.??"]
+[Round "?"]
+[White "Chessington"]
+[Black "Stockfish_1400"]
+[Result "1-0"]
+[FEN "rnbqkbnr/pp1ppppp/2p5/8/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2"]
+[SetUp "1"]
+
+2. Nf3 d5 3. e5 Bf5 4. Nc3 h5 5. d4 e6 6. Bd3 Ne7 7. O-O Bxd3 8. Qxd3 Qb6 9. a4 Nf5 10. a5 Qc7 11. Bf4 Be7 12. Ne2 h4 13. c4 a6 14. cxd5 cxd5 15. Nc3 Bd8 16. Rfd1 Nc6 17. Nxd5 exd5 18. Qxf5 Qe7 19. Qg4 g6 20. Bg5 Qe6 21. Qf4 Rc8 22. h3 Bxg5 23. Nxg5 Qf5 24. Qxf5 gxf5 25. e6 Nd8 26. Rac1 Rc4 27. Rxc4 fxe6 28. Rc8 Kd7 29. Rdc1 e5 30. R1c7+ Kd6 31. dxe5+ Kxe5 32. Rd7 Kf6 33. Nf3 Nf7 34. Rxf7+ Ke6 35. Ng5+ Kd6 36. Rxh8 b6 37. Rd8+ Ke5 38. axb6 a5 39. Rc8 f4 40. Re8+ Kd6 41. Rc7 f3 42. Nf7# 1-0
+
+[Event "Elo Benchmark vs SF 1400"]
+[Site "?"]
+[Date "????.??.??"]
+[Round "?"]
+[White "Stockfish_1400"]
+[Black "Chessington"]
+[Result "1-0"]
+[FEN "rnbqkb1r/pppppp1p/5np1/8/2PP4/8/PP2PPPP/RNBQKBNR w KQkq - 0 3"]
+[SetUp "1"]
+
+3. e3 Bg7 4. Bd3 O-O 5. Nc3 Nc6 6. Nge2 e6 7. e4 e5 8. d5 Nb4 9. d6 cxd6 10. Bg5 h6 11. Be3 Ng4 12. O-O Nxe3 13. fxe3 Qg5 14. Qd2 Nxd3 15. Qxd3 Qe7 16. Nd5 Qh4 17. Rab1 a6 18. Rbd1 Qd8 19. b3 Re8 20. Rxf7 Kxf7 21. Rf1+ Kg8 22. Ng3 Qa5 23. b4 Qd8 24. h4 Qxh4 25. Nc7 Rd8 26. Rf3 Rf8 27. Rxf8+ Bxf8 28. Qd5+ Kg7 29. Kf1 Rb8 30. c5 Qxg3 31. Ne8+ Kh8 32. Qf7 Qh4 33. Qxf8+ Kh7 34. Qf7+ Kh8 35. Qg7# 1-0
+
+[Event "Elo Benchmark vs SF 1400"]
+[Site "?"]
+[Date "????.??.??"]
+[Round "?"]
+[White "Chessington"]
+[Black "Stockfish_1400"]
+[Result "0-1"]
+[FEN "rnbqkbnr/pppppppp/8/8/2P5/8/PP1PPPPP/RNBQKBNR b KQkq - 0 1"]
+[SetUp "1"]
+
+1... d6 2. Nc3 c5 3. e4 g6 4. h3 Nf6 5. Nf3 Bg7 6. Bd3 Nh5 7. Nd5 e6 8. Qa4+ Nc6 9. Qxc6+ bxc6 10. Ne3 a5 11. g3 O-O 12. O-O a4 13. Ng4 f6 14. Rd1 f5 15. exf5 gxf5 16. Bxf5 Rxf5 17. Kg2 e5 18. d3 Rxf3 19. Kxf3 Bd7 20. Kg2 Bxg4 21. hxg4 Nf4+ 22. gxf4 Qd7 23. f5 Qf7 24. Be3 e4 25. dxe4 Qxc4 26. Rxd6 Qxe4+ 27. Kg1 a3 28. Bxc5 Qxg4+ 29. Kf1 Qc4+ 30. Ke1 axb2 31. Rb1 Qe4+ 32. Kd2 Qxb1 33. Ke2 Qe4+ 34. Kd2 b1=Q 35. Bb6 Qbc2# 0-1
+
+[Event "Elo Benchmark vs SF 1400"]
+[Site "?"]
+[Date "????.??.??"]
+[Round "?"]
+[White "Stockfish_1400"]
+[Black "Chessington"]
+[Result "0-1"]
+[FEN "rnbqkbnr/ppp1pppp/8/3p4/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2"]
+[SetUp "1"]
+
+2. exd5 Nf6 3. Nf3 Nxd5 4. d4 Bg4 5. Nc3 Nxc3 6. bxc3 Nc6 7. Be3 e5 8. d5 Ne7 9. c4 Nf5 10. Qc1 Bxf3 11. gxf3 Bb4+ 12. Bd2 Bxd2+ 13. Qxd2 Nd4 14. Bg2 Qf6 15. Qd3 Nxc2+ 16. Qxc2 Qg5 17. Qa4+ Kd8 18. Bf1 Rf8 19. Qa3 Re8 20. Rb1 Kc8 21. Bh3+ f5 22. Qe3 Qh5 23. Bg2 f4 24. Qb3 Rb8 25. c5 b5 26. Rb2 a5 27. O-O a4 28. Qb4 e4 29. fxe4 f3 30. c6 Qg5 31. d6 Qxg2# 0-1
+
