@@ -5,6 +5,7 @@ from typing import Optional
 from src.core.board import Board
 from src.core.types import PieceType
 from src.search.eval import evaluate
+from src.search.see import see
 from src.search.tt import Bound, TTEntry, TranspositionTable
 
 INF = 100_000
@@ -78,6 +79,10 @@ def quiescence(
         # Delta pruning: skip if even capturing the piece can't raise alpha.
         cap_val = _capture_value(board, move)
         if stand_pat + cap_val + DELTA_MARGIN < alpha:
+            continue
+
+        # SEE pruning: skip losing captures.
+        if see(board, move) < 0:
             continue
 
         undo = board.make_move(move)

@@ -4,6 +4,7 @@ from typing import List, Optional
 
 from src.core.board import Board
 from src.core.types import Color, Move, PieceType
+from src.search.see import see
 
 # Piece values for MVV-LVA scoring.
 _PIECE_VAL = {
@@ -20,6 +21,7 @@ _TT_MOVE_SCORE = 10_000_000
 _GOOD_CAPTURE_BASE = 1_000_000
 _KILLER_SCORE = 900_000
 # History scores are 0..~800_000 range.
+_BAD_CAPTURE_BASE = -1_000_000
 
 _MAX_KILLERS = 2
 _MAX_PLY = 128
@@ -82,20 +84,31 @@ class MoveOrderer:
         if tt_move is not None and move == tt_move:
             return _TT_MOVE_SCORE
 
-        # 2. Captures: MVV-LVA.
+        # 2. Captures: use SEE to separate good from bad.
         victim = board.squares[move.to_sq]
-        if victim is not None:
-            victim_val = _PIECE_VAL.get(victim[1], 0)
+        is_ep = (
+            victim is None
+            and board.ep_square is not None
+            and move.to_sq == board.ep_square
+            and board.squares[move.from_sq] is not None
+            and board.squares[move.from_sq][1] == PieceType.PAWN
+        )
+        if victim is not None or is_ep:
+            victim_val = (
+                _PIECE_VAL.get(victim[1], 0) if victim is not None
+                else _PIECE_VAL[PieceType.PAWN]
+            )
             attacker = board.squares[move.from_sq]
             attacker_val = _PIECE_VAL.get(attacker[1], 0) if attacker else 0
-            # MVV-LVA: high victim value, low attacker value.
-            return _GOOD_CAPTURE_BASE + victim_val * 10 - attacker_val
-
-        # En passant capture.
-        if board.ep_square is not None and move.to_sq == board.ep_square:
-            attacker = board.squares[move.from_sq]
-            if attacker is not None and attacker[1] == PieceType.PAWN:
-                return _GOOD_CAPTURE_BASE + _PIECE_VAL[PieceType.PAWN] * 10 - _PIECE_VAL[PieceType.PAWN]
+            # Clearly winning or equal capture: skip SEE.
+            if victim_val >= attacker_val:
+                return _GOOD_CAPTURE_BASE + victim_val * 10 - attacker_val
+            # Potentially losing capture: use SEE.
+            see_val = see(board, move)
+            if see_val >= 0:
+                return _GOOD_CAPTURE_BASE + victim_val * 10 - attacker_val
+            # Losing capture: order below quiet moves.
+            return _BAD_CAPTURE_BASE + see_val
 
         # 3. Killer moves.
         if ply < _MAX_PLY:
